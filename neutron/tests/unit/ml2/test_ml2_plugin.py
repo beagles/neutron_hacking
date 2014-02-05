@@ -66,6 +66,22 @@ class Ml2PluginV2TestCase(test_plugin.NeutronDbPluginV2TestCase):
 
 class TestMl2BulkToggle(Ml2PluginV2TestCase):
 
+    def setUp(self):
+        super(TestMl2BulkToggle, self).setUp()
+        # since we call setUp() inside test cases, we end up with duplicate
+        # cleanup functions registered; to mitigate the issue, deduplicate it
+        # before proceeding
+        self.deduplicate_cleanups()
+
+    def deduplicate_cleanups(self):
+        seen = []
+        new_cleanups = []
+        for fun, args, kwargs in self._cleanups:
+            if fun not in seen:
+                new_cleanups.append((fun, args, kwargs))
+                seen.append(fun)
+        self._cleanups = new_cleanups
+
     def test_bulk_disable_with_bulkless_driver(self):
         self.tearDown()
         self._mechanism_drivers = ['logger', 'test', 'bulkless']

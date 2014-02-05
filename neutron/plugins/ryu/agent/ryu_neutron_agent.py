@@ -25,6 +25,7 @@ import time
 
 import eventlet
 from oslo.config import cfg
+from oslo import messaging
 from ryu.app import client
 from ryu.app import conf_switch_key
 from ryu.app import rest_nw_id
@@ -40,7 +41,7 @@ from neutron.common import topics
 from neutron import context as q_context
 from neutron.extensions import securitygroup as ext_sg
 from neutron.openstack.common import log
-from neutron.openstack.common.rpc import dispatcher
+
 from neutron.plugins.ryu.common import config  # noqa
 
 
@@ -166,9 +167,7 @@ class RyuPluginApi(agent_rpc.PluginApi,
                    sg_rpc.SecurityGroupServerRpcApiMixin):
     def get_ofp_rest_api_addr(self, context):
         LOG.debug(_("Get Ryu rest API address"))
-        return self.call(context,
-                         self.make_msg('get_ofp_rest_api'),
-                         topic=self.topic)
+        return self.client.call(context, 'get_ofp_rest_api')
 
 
 class RyuSecurityGroupAgent(sg_rpc.SecurityGroupAgentRpcMixin):
@@ -181,7 +180,7 @@ class RyuSecurityGroupAgent(sg_rpc.SecurityGroupAgentRpcMixin):
 
 class OVSNeutronOFPRyuAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     def __init__(self, integ_br, tunnel_ip, ovsdb_ip, ovsdb_port,
                  polling_interval, root_helper):
@@ -198,15 +197,12 @@ class OVSNeutronOFPRyuAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         self.topic = topics.AGENT
         self.plugin_rpc = RyuPluginApi(topics.PLUGIN)
         self.context = q_context.get_admin_context_without_session()
-        self.dispatcher = self._create_rpc_dispatcher()
         consumers = [[topics.PORT, topics.UPDATE],
                      [topics.SECURITY_GROUP, topics.UPDATE]]
-        self.connection = agent_rpc.create_consumers(self.dispatcher,
-                                                     self.topic,
-                                                     consumers)
-
-    def _create_rpc_dispatcher(self):
-        return dispatcher.RpcDispatcher([self])
+        self.callbacks = [self]
+        self.rpc_servers = agent_rpc.create_servers(self.callbacks,
+                                                    self.topic,
+                                                    consumers)
 
     def _setup_integration_br(self, root_helper, integ_br,
                               tunnel_ip, ovsdb_port, ovsdb_ip):

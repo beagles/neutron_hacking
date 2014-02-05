@@ -17,13 +17,14 @@
 # @author: Isaku Yamahata
 
 from oslo.config import cfg
+from oslo import messaging
 from ryu.app import client
 from ryu.app import rest_nw_id
 
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.common import constants as q_const
 from neutron.common import exceptions as n_exc
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.db import api as db
 from neutron.db import db_base_plugin_v2
@@ -37,8 +38,8 @@ from neutron.db import portbindings_base
 from neutron.db import securitygroups_rpc_base as sg_db_rpc
 from neutron.extensions import portbindings
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
-from neutron.openstack.common.rpc import proxy
+
+
 from neutron.plugins.common import constants as svc_constants
 from neutron.plugins.ryu.common import config  # noqa
 from neutron.plugins.ryu.db import api_v2 as db_api_v2
@@ -51,13 +52,10 @@ class RyuRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
                       l3_rpc_base.L3RpcCallbackMixin,
                       sg_db_rpc.SecurityGroupServerRpcCallbackMixin):
 
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     def __init__(self, ofp_rest_api_addr):
         self.ofp_rest_api_addr = ofp_rest_api_addr
-
-    def create_rpc_dispatcher(self):
-        return q_rpc.PluginRpcDispatcher([self])
 
     def get_ofp_rest_api(self, context, **kwargs):
         LOG.debug(_("get_ofp_rest_api: %s"), self.ofp_rest_api_addr)
@@ -71,22 +69,20 @@ class RyuRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
         return port
 
 
-class AgentNotifierApi(proxy.RpcProxy,
-                       sg_rpc.SecurityGroupAgentRpcApiMixin):
-
-    BASE_RPC_API_VERSION = '1.0'
+class AgentNotifierApi(sg_rpc.SecurityGroupAgentRpcApiMixin):
 
     def __init__(self, topic):
-        super(AgentNotifierApi, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
+        super(AgentNotifierApi, self).__init__()
+        target = messaging.Target(topic=topic, version='1.0')
+        self.client = rpc.get_client(target)
         self.topic_port_update = topics.get_topic_name(topic,
                                                        topics.PORT,
                                                        topics.UPDATE)
 
     def port_update(self, context, port):
-        self.fanout_cast(context,
-                         self.make_msg('port_update', port=port),
-                         topic=self.topic_port_update)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_port_update)
+        cctxt.cast(context, 'port_update', port=port)
 
 
 class RyuNeutronPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
@@ -137,13 +133,16 @@ class RyuNeutronPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
     def _setup_rpc(self):
         self.service_topics = {svc_constants.CORE: topics.PLUGIN,
                                svc_constants.L3_ROUTER_NAT: topics.L3PLUGIN}
-        self.conn = rpc.create_connection(new=True)
+
         self.notifier = AgentNotifierApi(topics.AGENT)
-        self.callbacks = RyuRpcCallbacks(self.ofp_api_host)
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
+        self.callbacks = [RyuRpcCallbacks(self.ofp_api_host)]
+
+        self.rpc_servers = []
         for svc_topic in self.service_topics.values():
-            self.conn.create_consumer(svc_topic, self.dispatcher, fanout=False)
-        self.conn.consume_in_thread()
+            target = messaging.Target(topic=svc_topic, server=cfg.CONF.host)
+            rpc_server = rpc.get_server(target, self.callbacks)
+            rpc_server.start()
+            self.rpc_servers.append(rpc_server)
 
     def _create_all_tenant_network(self):
         for net in db_api_v2.network_all_tenant_list():

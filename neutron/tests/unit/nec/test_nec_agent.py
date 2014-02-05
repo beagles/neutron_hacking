@@ -21,6 +21,7 @@ import time
 
 import mock
 from oslo.config import cfg
+from oslo.messaging import rpc
 import testtools
 
 from neutron.agent.linux import ovs_lib
@@ -310,10 +311,9 @@ class TestNecAgentPluginApi(TestNecAgentBase):
 
     def _test_plugin_api(self, expected_failure=False):
         with contextlib.nested(
-            mock.patch.object(nec_neutron_agent.NECPluginApi, 'make_msg'),
-            mock.patch.object(nec_neutron_agent.NECPluginApi, 'call'),
+            mock.patch.object(rpc.RPCClient, 'call'),
             mock.patch.object(nec_neutron_agent, 'LOG')
-        ) as (make_msg, apicall, log):
+        ) as (apicall, log):
             agent_id = 'nec-q-agent.dummy-host'
             if expected_failure:
                 apicall.side_effect = Exception()
@@ -326,15 +326,13 @@ class TestNecAgentPluginApi(TestNecAgentBase):
                 # port_removed
                 ['id-3', 'id-4', 'id-5'])
 
-            make_msg.assert_called_once_with(
+            apicall.assert_called_once_with(
+                mock.sentinel.ctx,
                 'update_ports', topic='q-agent-notifier',
                 agent_id=agent_id, datapath_id=OVS_DPID_0X,
                 port_added=[{'id': 'id-1', 'mac': 'mac-1', 'port_no': '1'},
                             {'id': 'id-2', 'mac': 'mac-2', 'port_no': '2'}],
                 port_removed=['id-3', 'id-4', 'id-5'])
-
-            apicall.assert_called_once_with(mock.sentinel.ctx,
-                                            make_msg.return_value)
 
             self.assertTrue(log.info.called)
             if expected_failure:

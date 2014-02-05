@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import os
 import socket
+import sys
 
 import eventlet
 import httplib2
@@ -325,7 +326,7 @@ def main():
     cfg.CONF.register_opts(UnixDomainMetadataProxy.OPTS)
     cfg.CONF.register_opts(MetadataProxyHandler.OPTS)
     agent_conf.register_agent_state_opts_helper(cfg.CONF)
-    cfg.CONF(project='neutron')
+    config.parse(sys.argv[1:])
     config.setup_logging(cfg.CONF)
     utils.log_opt_values(LOG)
     proxy = UnixDomainMetadataProxy(cfg.CONF)

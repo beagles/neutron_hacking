@@ -16,6 +16,7 @@
 import sys
 
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
@@ -23,7 +24,7 @@ from neutron.api.rpc.agentnotifiers import l3_rpc_agent_api
 from neutron.api.v2 import attributes
 from neutron.common import constants as q_const
 from neutron.common import exceptions as n_exc
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.common import utils
 from neutron.db import agents_db
@@ -44,8 +45,8 @@ from neutron.extensions import providernet as provider
 from neutron import manager
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
-from neutron.openstack.common.rpc import proxy
+
+
 from neutron.plugins.common import constants as svc_constants
 from neutron.plugins.common import utils as plugin_utils
 from neutron.plugins.linuxbridge.common import constants
@@ -57,23 +58,13 @@ LOG = logging.getLogger(__name__)
 
 class LinuxBridgeRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
                               l3_rpc_base.L3RpcCallbackMixin,
-                              sg_db_rpc.SecurityGroupServerRpcCallbackMixin
-                              ):
+                              sg_db_rpc.SecurityGroupServerRpcCallbackMixin):
 
     # history
     #   1.1 Support Security Group RPC
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
     # Device names start with "tap"
     TAP_PREFIX_LEN = 3
-
-    def create_rpc_dispatcher(self):
-        '''Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        '''
-        return q_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
 
     @classmethod
     def get_port_from_device(cls, device):
@@ -162,8 +153,7 @@ class LinuxBridgeRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
             LOG.debug(_("%s can not be found in database"), device)
 
 
-class AgentNotifierApi(proxy.RpcProxy,
-                       sg_rpc.SecurityGroupAgentRpcApiMixin):
+class AgentNotifierApi(sg_rpc.SecurityGroupAgentRpcApiMixin):
     '''Agent side of the linux bridge rpc API.
 
     API version history:
@@ -174,12 +164,10 @@ class AgentNotifierApi(proxy.RpcProxy,
 
     '''
 
-    BASE_RPC_API_VERSION = '1.1'
-
     def __init__(self, topic):
-        super(AgentNotifierApi, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
-        self.topic = topic
+        super(AgentNotifierApi, self).__init__()
+        target = messaging.Target(topic=topic, version='1.1')
+        self.client = rpc.get_client(target)
         self.topic_network_delete = topics.get_topic_name(topic,
                                                           topics.NETWORK,
                                                           topics.DELETE)
@@ -188,10 +176,9 @@ class AgentNotifierApi(proxy.RpcProxy,
                                                        topics.UPDATE)
 
     def network_delete(self, context, network_id):
-        self.fanout_cast(context,
-                         self.make_msg('network_delete',
-                                       network_id=network_id),
-                         topic=self.topic_network_delete)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_network_delete)
+        cctxt.cast(context, 'network_delete', network_id=network_id)
 
     def port_update(self, context, port, physical_network, vlan_id):
         network_type, segmentation_id = constants.interpret_vlan_id(vlan_id)
@@ -201,9 +188,9 @@ class AgentNotifierApi(proxy.RpcProxy,
                   'segmentation_id': segmentation_id}
         if cfg.CONF.AGENT.rpc_support_old_agents:
             kwargs['vlan_id'] = vlan_id
-        msg = self.make_msg('port_update', **kwargs)
-        self.fanout_cast(context, msg,
-                         topic=self.topic_port_update)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_port_update)
+        cctxt.cast(context, 'port_update', **kwargs)
 
 
 class LinuxBridgePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
@@ -282,19 +269,23 @@ class LinuxBridgePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
         # RPC support
         self.service_topics = {svc_constants.CORE: topics.PLUGIN,
                                svc_constants.L3_ROUTER_NAT: topics.L3PLUGIN}
-        self.conn = rpc.create_connection(new=True)
-        self.callbacks = LinuxBridgeRpcCallbacks()
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
+
+        self.callbacks = [LinuxBridgeRpcCallbacks(),
+                          agents_db.AgentExtRpcCallback()]
+
+        self.rpc_servers = []
         for svc_topic in self.service_topics.values():
-            self.conn.create_consumer(svc_topic, self.dispatcher, fanout=False)
-        # Consume from all consumers in a thread
-        self.conn.consume_in_thread()
+            target = messaging.Target(topic=svc_topic, server=cfg.CONF.host)
+            rpc_server = rpc.get_server(target, self.callbacks)
+            rpc_server.start()
+            self.rpc_servers.append(rpc_server)
+
         self.notifier = AgentNotifierApi(topics.AGENT)
         self.agent_notifiers[q_const.AGENT_TYPE_DHCP] = (
             dhcp_rpc_agent_api.DhcpAgentNotifyAPI()
         )
         self.agent_notifiers[q_const.AGENT_TYPE_L3] = (
-            l3_rpc_agent_api.L3AgentNotify
+            l3_rpc_agent_api.L3AgentNotifyAPI()
         )
 
     def _parse_network_vlan_ranges(self):

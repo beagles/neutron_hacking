@@ -20,6 +20,7 @@
 import time
 
 from oslo.config import cfg
+from oslo import messaging
 from ryu.app.ofctl import api as ryu_api
 from ryu.base import app_manager
 from ryu.lib import hub
@@ -38,8 +39,6 @@ from neutron import context
 from neutron.extensions import securitygroup as ext_sg
 from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
-from neutron.openstack.common.rpc import common as rpc_common
-from neutron.openstack.common.rpc import dispatcher
 from neutron.plugins.common import constants as p_const
 from neutron.plugins.ofagent.common import config  # noqa
 from neutron.plugins.openvswitch.common import constants
@@ -200,7 +199,7 @@ class OFANeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     # history
     #   1.0 Initial version
     #   1.1 Support Security Group RPC
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     def __init__(self, ryuapp, integ_br, tun_br, local_ip,
                  bridge_mappings, root_helper,
@@ -311,15 +310,15 @@ class OFANeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         # RPC network init
         self.context = context.get_admin_context_without_session()
         # Handle updates from service
-        self.dispatcher = self.create_rpc_dispatcher()
+        self.callbacks = [self]
         # Define the listening consumers for the agent
         consumers = [[topics.PORT, topics.UPDATE],
                      [topics.NETWORK, topics.DELETE],
                      [constants.TUNNEL, topics.UPDATE],
                      [topics.SECURITY_GROUP, topics.UPDATE]]
-        self.connection = agent_rpc.create_consumers(self.dispatcher,
-                                                     self.topic,
-                                                     consumers)
+        self.rpc_servers = agent_rpc.create_servers(self.callbacks,
+                                                    self.topic,
+                                                    consumers)
         report_interval = cfg.CONF.AGENT.report_interval
         if report_interval:
             heartbeat = loopingcall.FixedIntervalLoopingCall(
@@ -368,7 +367,7 @@ class OFANeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 self.plugin_rpc.update_device_down(self.context, port['id'],
                                                    self.agent_id,
                                                    cfg.CONF.host)
-        except rpc_common.Timeout:
+        except messaging.Timeout:
             LOG.error(_("RPC timeout while updating port %s"), port['id'])
 
     def tunnel_update(self, context, **kwargs):
@@ -388,14 +387,6 @@ class OFANeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             return
         tun_name = '%s-%s' % (tunnel_type, tunnel_id)
         self.setup_tunnel_port(tun_name, tunnel_ip, tunnel_type)
-
-    def create_rpc_dispatcher(self):
-        """Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        """
-        return dispatcher.RpcDispatcher([self])
 
     def _provision_local_vlan_outbound_for_tunnel(self, lvid,
                                                   segmentation_id, ofports):

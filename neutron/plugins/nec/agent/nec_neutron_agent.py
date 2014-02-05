@@ -25,18 +25,21 @@ import time
 
 import eventlet
 
+from oslo import messaging
+
 from neutron.agent.linux import ovs_lib
 from neutron.agent import rpc as agent_rpc
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.common import config as logging_config
 from neutron.common import constants as q_const
+from neutron.common import rpc
 from neutron.common import topics
 from neutron import context as q_context
 from neutron.extensions import securitygroup as ext_sg
 from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
-from neutron.openstack.common.rpc import dispatcher
-from neutron.openstack.common.rpc import proxy
+
+
 from neutron.plugins.nec.common import config
 
 
@@ -44,7 +47,7 @@ LOG = logging.getLogger(__name__)
 
 
 class NECPluginApi(agent_rpc.PluginApi):
-    BASE_RPC_API_VERSION = '1.0'
+    target = messaging.Target(version='1.0')
 
     def update_ports(self, context, agent_id, datapath_id,
                      port_added, port_removed):
@@ -52,18 +55,17 @@ class NECPluginApi(agent_rpc.PluginApi):
         LOG.info(_("Update ports: added=%(added)s, "
                    "removed=%(removed)s"),
                  {'added': port_added, 'removed': port_removed})
-        self.call(context,
-                  self.make_msg('update_ports',
-                                topic=topics.AGENT,
-                                agent_id=agent_id,
-                                datapath_id=datapath_id,
-                                port_added=port_added,
-                                port_removed=port_removed))
+        self.client.call(context, 'update_ports',
+                         topic=topics.AGENT,
+                         agent_id=agent_id,
+                         datapath_id=datapath_id,
+                         port_added=port_added,
+                         port_removed=port_removed)
 
 
 class NECAgentRpcCallback(object):
 
-    RPC_API_VERSION = '1.0'
+    target = messaging.Target(version='1.0')
 
     def __init__(self, context, agent, sg_agent):
         self.context = context
@@ -82,18 +84,17 @@ class NECAgentRpcCallback(object):
             self.sg_agent.refresh_firewall()
 
 
-class SecurityGroupServerRpcApi(proxy.RpcProxy,
-                                sg_rpc.SecurityGroupServerRpcApiMixin):
+class SecurityGroupServerRpcApi(sg_rpc.SecurityGroupServerRpcApiMixin):
 
     def __init__(self, topic):
-        super(SecurityGroupServerRpcApi, self).__init__(
-            topic=topic, default_version=sg_rpc.SG_RPC_VERSION)
+        super(SecurityGroupServerRpcApi, self).__init__()
+        target = messaging.Target(topic=topic, version=sg_rpc.SG_RPC_VERSION)
+        self.client = rpc.get_client(target)
 
 
-class SecurityGroupAgentRpcCallback(
-    sg_rpc.SecurityGroupAgentRpcCallbackMixin):
+class SecurityGroupAgentRpcCallback(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
-    RPC_API_VERSION = sg_rpc.SG_RPC_VERSION
+    target = messaging.Target(version=sg_rpc.SG_RPC_VERSION)
 
     def __init__(self, context, sg_agent):
         self.context = context
@@ -152,14 +153,13 @@ class NECNeutronAgent(object):
                                                 self, self.sg_agent)
         self.callback_sg = SecurityGroupAgentRpcCallback(self.context,
                                                          self.sg_agent)
-        self.dispatcher = dispatcher.RpcDispatcher([self.callback_nec,
-                                                    self.callback_sg])
+        self.callbacks = [self.callback_nec, self.callback_sg]
         # Define the listening consumer for the agent
         consumers = [[topics.PORT, topics.UPDATE],
                      [topics.SECURITY_GROUP, topics.UPDATE]]
-        self.connection = agent_rpc.create_consumers(self.dispatcher,
-                                                     self.topic,
-                                                     consumers)
+        self.rpc_servers = agent_rpc.create_servers(self.callbacks,
+                                                    self.topic,
+                                                    consumers)
 
         report_interval = config.CONF.AGENT.report_interval
         if report_interval:

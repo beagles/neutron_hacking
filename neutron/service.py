@@ -13,16 +13,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import eventlet
 import inspect
 import logging as std_logging
 import os
 import random
 
 from oslo.config import cfg
+from oslo import messaging
+from oslo.messaging.server import MessageHandlingServer
 
 from neutron.common import config
 from neutron.common import legacy
+from neutron.common import rpc
 from neutron import context
 from neutron import manager
 from neutron import neutron_plugin_base_v2
@@ -31,15 +33,19 @@ from neutron.openstack.common import excutils
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
-from neutron.openstack.common.rpc import service
-from neutron.openstack.common.service import ProcessLauncher
+from neutron.openstack.common import service
 from neutron import wsgi
 
 
-service_opts = [
+# TODO(ihrachys): move periodic_interval into separate options list because we
+# need to be able to unregister it in LBaaS agent where we have an independent
+# option with the same name
+periodic_interval_opts = [
     cfg.IntOpt('periodic_interval',
                default=40,
-               help=_('Seconds between running periodic tasks')),
+               help=_('Seconds between running periodic tasks'))
+]
+service_opts = [
     cfg.IntOpt('api_workers',
                default=0,
                help=_('Number of separate worker processes for service')),
@@ -54,6 +60,7 @@ service_opts = [
 ]
 CONF = cfg.CONF
 CONF.register_opts(service_opts)
+CONF.register_opts(periodic_interval_opts)
 
 LOG = logging.getLogger(__name__)
 
@@ -130,12 +137,12 @@ class RpcWorker(object):
         self._server = self._plugin.start_rpc_listener()
 
     def wait(self):
-        if isinstance(self._server, eventlet.greenthread.GreenThread):
+        if isinstance(self._server, MessageHandlingServer):
             self._server.wait()
 
     def stop(self):
-        if isinstance(self._server, eventlet.greenthread.GreenThread):
-            self._server.kill()
+        if isinstance(self._server, MessageHandlingServer):
+            self._server.stop()
             self._server = None
 
 
@@ -156,14 +163,14 @@ def serve_rpc():
         raise NotImplementedError
 
     try:
-        rpc = RpcWorker(plugin)
+        worker = RpcWorker(plugin)
 
         if cfg.CONF.rpc_workers < 1:
-            rpc.start()
-            return rpc
+            worker.start()
+            return worker
         else:
-            launcher = ProcessLauncher(wait_interval=1.0)
-            launcher.launch_service(rpc, workers=cfg.CONF.rpc_workers)
+            launcher = service.ProcessLauncher(wait_interval=1.0)
+            launcher.launch_service(worker, workers=cfg.CONF.rpc_workers)
             return launcher
     except Exception:
         with excutils.save_and_reraise_exception():
@@ -197,7 +204,7 @@ class Service(service.Service):
     def __init__(self, host, binary, topic, manager, report_interval=None,
                  periodic_interval=None, periodic_fuzzy_delay=None,
                  *args, **kwargs):
-
+        super(Service, self).__init__()
         self.binary = binary
         self.manager_class_name = manager
         manager_class = importutils.import_class(self.manager_class_name)
@@ -207,11 +214,13 @@ class Service(service.Service):
         self.periodic_fuzzy_delay = periodic_fuzzy_delay
         self.saved_args, self.saved_kwargs = args, kwargs
         self.timers = []
-        super(Service, self).__init__(host, topic, manager=self.manager)
+        target = messaging.Target(topic=topic, server=host)
+        self.rpc_server = rpc.get_server(target, [self.manager])
 
     def start(self):
         self.manager.init_host()
         super(Service, self).start()
+        self.rpc_server.start()
         if self.report_interval:
             pulse = loopingcall.FixedIntervalLoopingCall(self.report_state)
             pulse.start(interval=self.report_interval,
@@ -277,6 +286,7 @@ class Service(service.Service):
         self.stop()
 
     def stop(self):
+        self.rpc_server.stop()
         super(Service, self).stop()
         for x in self.timers:
             try:

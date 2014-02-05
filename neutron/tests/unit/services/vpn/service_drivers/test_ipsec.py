@@ -38,7 +38,6 @@ class TestIPsecDriver(base.BaseTestCase):
     def setUp(self):
         super(TestIPsecDriver, self).setUp()
         self.addCleanup(mock.patch.stopall)
-        mock.patch('neutron.openstack.common.rpc.create_connection').start()
 
         l3_agent = mock.Mock()
         l3_agent.host = FAKE_HOST
@@ -61,15 +60,11 @@ class TestIPsecDriver(base.BaseTestCase):
 
     def _test_update(self, func, args):
         ctxt = context.Context('', 'somebody')
-        with mock.patch.object(self.driver.agent_rpc, 'cast') as cast:
+        with mock.patch.object(self.driver.agent_rpc.client,
+                               'prepare') as prepare:
             func(ctxt, *args)
-            cast.assert_called_once_with(
-                ctxt,
-                {'args': {},
-                 'namespace': None,
-                 'method': 'vpnservice_updated'},
-                version='1.0',
-                topic='ipsec_agent.fake_host')
+            cast = prepare.return_value.cast
+            cast.assert_called_once_with(ctxt, 'vpnservice_updated')
 
     def test_create_ipsec_site_connection(self):
         self._test_update(self.driver.create_ipsec_site_connection,

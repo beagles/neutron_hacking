@@ -20,10 +20,11 @@
 import functools
 
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.common import constants as q_const
 from neutron.common import exceptions as n_exc
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.db import agents_db
 from neutron.db import db_base_plugin_v2
@@ -33,8 +34,6 @@ from neutron.db import portbindings_db
 from neutron.extensions import portbindings
 from neutron.openstack.common import excutils
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
-from neutron.openstack.common.rpc import proxy
 from neutron.plugins.ibm.common import config  # noqa
 from neutron.plugins.ibm.common import constants
 from neutron.plugins.ibm.common import exceptions as sdnve_exc
@@ -49,14 +48,6 @@ class SdnveRpcCallbacks():
     def __init__(self, notifier):
         self.notifier = notifier  # used to notify the agent
 
-    def create_rpc_dispatcher(self):
-        '''Get the rpc dispatcher for this manager.
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        '''
-        return q_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
-
     def sdnve_info(self, rpc_context, **kwargs):
         '''Update new information.'''
         info = kwargs.get('info')
@@ -65,24 +56,21 @@ class SdnveRpcCallbacks():
         return info
 
 
-class AgentNotifierApi(proxy.RpcProxy):
+class AgentNotifierApi(object):
     '''Agent side of the SDN-VE rpc API.'''
 
-    BASE_RPC_API_VERSION = '1.0'
-
     def __init__(self, topic):
-        super(AgentNotifierApi, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
-
+        super(AgentNotifierApi, self).__init__()
+        target = messaging.Target(topic=topic, version='1.0')
+        self.client = rpc.get_client(target)
         self.topic_info_update = topics.get_topic_name(topic,
                                                        constants.INFO,
                                                        topics.UPDATE)
 
     def info_update(self, context, info):
-        self.fanout_cast(context,
-                         self.make_msg('info_update',
-                                       info=info),
-                         topic=self.topic_info_update)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_info_update)
+        cctxt.cast(context, 'info_update', info=info)
 
 
 def _ha(func):
@@ -137,15 +125,12 @@ class SdnvePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
 
     def setup_rpc(self):
         # RPC support
-        self.topic = topics.PLUGIN
-        self.conn = rpc.create_connection(new=True)
         self.notifier = AgentNotifierApi(topics.AGENT)
-        self.callbacks = SdnveRpcCallbacks(self.notifier)
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
-        self.conn.create_consumer(self.topic, self.dispatcher,
-                                  fanout=False)
-        # Consume from all consumers in a thread
-        self.conn.consume_in_thread()
+        self.callbacks = [SdnveRpcCallbacks(self.notifier),
+                          agents_db.AgentExtRpcCallback()]
+        target = messaging.Target(topic=topics.PLUGIN, server=cfg.CONF.host)
+        self.rpc_server = rpc.get_server(target, endpoints=self.callbacks)
+        self.rpc_server.start()
 
     def _update_base_binding_dict(self, tenant_type):
         if tenant_type == constants.TENANT_TYPE_OVERLAY:

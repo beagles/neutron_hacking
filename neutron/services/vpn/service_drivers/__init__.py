@@ -16,12 +16,12 @@
 #    under the License.
 
 import abc
-
+from oslo import messaging
 import six
 
+from neutron.common import rpc
 from neutron import manager
 from neutron.openstack.common import log as logging
-from neutron.openstack.common.rpc import proxy
 from neutron.plugins.common import constants
 
 LOG = logging.getLogger(__name__)
@@ -51,12 +51,14 @@ class VpnDriver(object):
         pass
 
 
-class BaseIPsecVpnAgentApi(proxy.RpcProxy):
+class BaseIPsecVpnAgentApi(object):
     """Base class for IPSec API to agent."""
 
     def __init__(self, to_agent_topic, topic, default_version):
+        super(BaseIPsecVpnAgentApi, self).__init__()
+        target = messaging.Target(topic=topic, version=default_version)
+        self.client = rpc.get_client(target)
         self.to_agent_topic = to_agent_topic
-        super(BaseIPsecVpnAgentApi, self).__init__(topic, default_version)
 
     def _agent_notification(self, context, method, router_id,
                             version=None, **kwargs):
@@ -69,7 +71,7 @@ class BaseIPsecVpnAgentApi(proxy.RpcProxy):
         plugin = manager.NeutronManager.get_service_plugins().get(
             constants.L3_ROUTER_NAT)
         if not version:
-            version = self.RPC_API_VERSION
+            version = self.target.version
         l3_agents = plugin.get_l3_agents_hosting_routers(
             admin_context, [router_id],
             admin_state_up=True,
@@ -81,10 +83,10 @@ class BaseIPsecVpnAgentApi(proxy.RpcProxy):
                        'host': l3_agent.host,
                        'method': method,
                        'args': kwargs})
-            self.cast(
-                context, self.make_msg(method, **kwargs),
+            cctxt = self.client.prepare(
                 version=version,
                 topic='%s.%s' % (self.to_agent_topic, l3_agent.host))
+            cctxt.cast(context, method, **kwargs)
 
     def vpnservice_updated(self, context, router_id):
         """Send update event of vpnservices."""

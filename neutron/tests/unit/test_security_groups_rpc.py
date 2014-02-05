@@ -21,6 +21,7 @@ from contextlib import nested
 import mock
 from mock import call
 from oslo.config import cfg
+from oslo import messaging
 from testtools import matchers
 import webob.exc
 
@@ -29,12 +30,13 @@ from neutron.agent.linux import iptables_manager
 from neutron.agent import rpc as agent_rpc
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.common import constants as const
+from neutron.common import rpc
 from neutron import context
 from neutron.db import securitygroups_rpc_base as sg_db_rpc
 from neutron.extensions import allowedaddresspairs as addr_pair
 from neutron.extensions import securitygroup as ext_sg
 from neutron.manager import NeutronManager
-from neutron.openstack.common.rpc import proxy
+
 from neutron.tests import base
 from neutron.tests.unit import test_extension_security_group as test_sg
 from neutron.tests.unit import test_iptables_firewall as test_fw
@@ -514,8 +516,8 @@ class SecurityGroupAgentRpcTestCase(base.BaseTestCase):
         firewall_object = firewall_base.FirewallDriver()
         self.firewall.defer_apply.side_effect = firewall_object.defer_apply
         self.agent.firewall = self.firewall
-        rpc = mock.Mock()
-        self.agent.plugin_rpc = rpc
+        rpc_mock = mock.Mock()
+        self.agent.plugin_rpc = rpc_mock
         self.fake_device = {'device': 'fake_device',
                             'security_groups': ['fake_sgid1', 'fake_sgid2'],
                             'security_group_source_groups': ['fake_sgid2'],
@@ -525,7 +527,7 @@ class SecurityGroupAgentRpcTestCase(base.BaseTestCase):
                                                       'fake_sgid2'}]}
         fake_devices = {'fake_device': self.fake_device}
         self.firewall.ports = fake_devices
-        rpc.security_group_rules_for_devices.return_value = fake_devices
+        rpc_mock.security_group_rules_for_devices.return_value = fake_devices
 
     def test_prepare_and_remove_devices_filter(self):
         self.agent.prepare_devices_filter(['fake_device'])
@@ -805,65 +807,69 @@ class SecurityGroupServerRpcApiTestCase(base.BaseTestCase):
     def setUp(self):
         super(SecurityGroupServerRpcApiTestCase, self).setUp()
         self.rpc = FakeSGRpcApi('fake_topic')
-        self.rpc.call = mock.Mock()
+        self.rpc.client.prepare = mock.Mock()
 
     def test_security_group_rules_for_devices(self):
         self.rpc.security_group_rules_for_devices(None, ['fake_device'])
-        self.rpc.call.assert_has_calls(
+        self.rpc.client.prepare.assert_has_calls(
+            [call(version=sg_rpc.SG_RPC_VERSION)])
+        self.rpc.client.prepare.return_value.call.assert_has_calls(
             [call(None,
-             {'args':
-                 {'devices': ['fake_device']},
-              'method': 'security_group_rules_for_devices',
-              'namespace': None},
-             version=sg_rpc.SG_RPC_VERSION,
-             topic='fake_topic')])
+                  'security_group_rules_for_devices',
+                  devices=['fake_device'])])
 
 
-class FakeSGNotifierAPI(proxy.RpcProxy,
-                        sg_rpc.SecurityGroupAgentRpcApiMixin):
-    pass
+class FakeSGNotifierAPI(sg_rpc.SecurityGroupAgentRpcApiMixin):
+
+    def __init__(self, topic, default_version):
+        super(FakeSGNotifierAPI, self).__init__()
+        target = messaging.Target(topic=topic, version=default_version)
+        self.client = rpc.get_client(target)
 
 
 class SecurityGroupAgentRpcApiTestCase(base.BaseTestCase):
+
+    version = sg_rpc.SG_RPC_VERSION
+    topic = 'fake-security_group-update'
+
     def setUp(self):
         super(SecurityGroupAgentRpcApiTestCase, self).setUp()
         self.notifier = FakeSGNotifierAPI(topic='fake',
                                           default_version='1.0')
-        self.notifier.fanout_cast = mock.Mock()
+        self.notifier.client.prepare = mock.Mock()
 
     def test_security_groups_rule_updated(self):
-        self.notifier.security_groups_rule_updated(
-            None, security_groups=['fake_sgid'])
-        self.notifier.fanout_cast.assert_has_calls(
-            [call(None,
-                  {'args':
-                      {'security_groups': ['fake_sgid']},
-                      'method': 'security_groups_rule_updated',
-                      'namespace': None},
-                  version=sg_rpc.SG_RPC_VERSION,
-                  topic='fake-security_group-update')])
+        with mock.patch('oslo.messaging.rpc.client._CallContext'):
+            self.notifier.security_groups_rule_updated(
+                None, security_groups=['fake_sgid'])
+            self.notifier.client.prepare.assert_has_calls(
+                [call(fanout=True, version=self.version, topic=self.topic)])
+
+            self.notifier.client.prepare.return_value.cast.assert_has_calls(
+                [call(None,
+                      'security_groups_rule_updated',
+                      security_groups=['fake_sgid'])])
 
     def test_security_groups_member_updated(self):
-        self.notifier.security_groups_member_updated(
-            None, security_groups=['fake_sgid'])
-        self.notifier.fanout_cast.assert_has_calls(
-            [call(None,
-                  {'args':
-                      {'security_groups': ['fake_sgid']},
-                      'method': 'security_groups_member_updated',
-                      'namespace': None},
-                  version=sg_rpc.SG_RPC_VERSION,
-                  topic='fake-security_group-update')])
+        with mock.patch('oslo.messaging.rpc.client._CallContext.cast'):
+            self.notifier.security_groups_member_updated(
+                None, security_groups=['fake_sgid'])
+            self.notifier.client.prepare.assert_has_calls(
+                [call(fanout=True, version=self.version, topic=self.topic)])
+            self.notifier.client.prepare.return_value.cast.assert_has_calls(
+                [call(None,
+                      'security_groups_member_updated',
+                      security_groups=['fake_sgid'])])
 
     def test_security_groups_rule_not_updated(self):
         self.notifier.security_groups_rule_updated(
             None, security_groups=[])
-        self.assertEqual(False, self.notifier.fanout_cast.called)
+        self.assertFalse(self.notifier.client.prepare.called)
 
     def test_security_groups_member_not_updated(self):
         self.notifier.security_groups_member_updated(
             None, security_groups=[])
-        self.assertEqual(False, self.notifier.fanout_cast.called)
+        self.assertEqual(False, self.notifier.client.prepare.called)
 
 #Note(nati) bn -> binary_name
 # id -> device_id

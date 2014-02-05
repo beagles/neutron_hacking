@@ -18,6 +18,7 @@
 import sys
 
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
@@ -25,8 +26,10 @@ from neutron.api.rpc.agentnotifiers import l3_rpc_agent_api
 from neutron.api.v2 import attributes
 from neutron.common import constants as q_const
 from neutron.common import exceptions as n_exc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.common import utils
+from neutron.db import agents_db
 from neutron.db import agentschedulers_db
 from neutron.db import db_base_plugin_v2
 from neutron.db import external_net_db
@@ -40,7 +43,7 @@ from neutron.extensions import portbindings
 from neutron.extensions import providernet as provider
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
+
 from neutron.plugins.common import constants as svc_constants
 from neutron.plugins.common import utils as plugin_utils
 from neutron.plugins.mlnx import agent_notify_api
@@ -119,19 +122,22 @@ class MellanoxEswitchPlugin(db_base_plugin_v2.NeutronDbPluginV2,
         # RPC support
         self.service_topics = {svc_constants.CORE: topics.PLUGIN,
                                svc_constants.L3_ROUTER_NAT: topics.L3PLUGIN}
-        self.conn = rpc.create_connection(new=True)
-        self.callbacks = rpc_callbacks.MlnxRpcCallbacks()
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
+        self.callbacks = [rpc_callbacks.MlnxRpcCallbacks(),
+                          agents_db.AgentExtRpcCallback()]
+
+        self.rpc_servers = []
         for svc_topic in self.service_topics.values():
-            self.conn.create_consumer(svc_topic, self.dispatcher, fanout=False)
-        # Consume from all consumers in a thread
-        self.conn.consume_in_thread()
+            target = messaging.Target(topic=svc_topic, server=cfg.CONF.host)
+            rpc_server = rpc.get_server(target, self.callbacks)
+            rpc_server.start()
+            self.rpc_servers.append(rpc_server)
+
         self.notifier = agent_notify_api.AgentNotifierApi(topics.AGENT)
         self.agent_notifiers[q_const.AGENT_TYPE_DHCP] = (
             dhcp_rpc_agent_api.DhcpAgentNotifyAPI()
         )
         self.agent_notifiers[q_const.AGENT_TYPE_L3] = (
-            l3_rpc_agent_api.L3AgentNotify
+            l3_rpc_agent_api.L3AgentNotifyAPI()
         )
 
     def _parse_network_config(self):

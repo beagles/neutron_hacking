@@ -18,11 +18,10 @@ import mock
 from oslo.config import cfg
 
 from neutron.agent.common import config
-from neutron.openstack.common.notifier import api as notifier_api
-from neutron.openstack.common.notifier import test_notifier
 from neutron.openstack.common import uuidutils
 from neutron.services.metering.agents import metering_agent
 from neutron.tests import base
+from neutron.tests import fake_notifier
 
 
 _uuid = uuidutils.generate_uuid
@@ -52,9 +51,6 @@ class TestMeteringOperations(base.BaseTestCase):
         cfg.CONF.set_override('measure_interval', 0)
         cfg.CONF.set_override('report_interval', 0)
 
-        notifier_api._drivers = None
-        cfg.CONF.set_override("notification_driver", [test_notifier.__name__])
-
         metering_rpc = ('neutron.services.metering.agents.metering_agent.'
                         'MeteringPluginRpc._get_sync_data_metering')
         self.metering_rpc_patch = mock.patch(metering_rpc, return_value=[])
@@ -73,7 +69,7 @@ class TestMeteringOperations(base.BaseTestCase):
         self.addCleanup(mock.patch.stopall)
 
     def tearDown(self):
-        test_notifier.NOTIFICATIONS = []
+        fake_notifier.reset()
         super(TestMeteringOperations, self).tearDown()
 
     def test_add_metering_label(self):
@@ -104,8 +100,8 @@ class TestMeteringOperations(base.BaseTestCase):
                                                           'bytes': 444}}
         self.agent._metering_loop()
 
-        self.assertNotEqual(len(test_notifier.NOTIFICATIONS), 0)
-        for n in test_notifier.NOTIFICATIONS:
+        self.assertNotEqual(len(fake_notifier.NOTIFICATIONS), 0)
+        for n in fake_notifier.NOTIFICATIONS:
             if n['event_type'] == 'l3.meter':
                 break
 

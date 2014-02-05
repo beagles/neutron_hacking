@@ -23,6 +23,7 @@ import uuid
 import eventlet
 import mock
 from oslo.config import cfg
+from oslo import messaging
 import testtools
 
 from neutron.agent.common import config
@@ -32,7 +33,6 @@ from neutron.agent.linux import dhcp
 from neutron.agent.linux import interface
 from neutron.common import constants as const
 from neutron.common import exceptions
-from neutron.openstack.common.rpc import common
 from neutron.tests import base
 
 
@@ -228,7 +228,7 @@ class TestDhcpAgent(base.BaseTestCase):
 
     def test_call_driver_remote_error_net_not_found(self):
         self._test_call_driver_failure(
-            exc=common.RemoteError(exc_type='NetworkNotFound'),
+            exc=messaging.RemoteError(exc_type='NetworkNotFound'),
             trace_level='warning')
 
     def test_call_driver_network_not_found(self):
@@ -841,13 +841,10 @@ class TestDhcpPluginApiProxy(base.BaseTestCase):
         self.proxy = dhcp_agent.DhcpPluginApi('foo', {}, None)
         self.proxy.host = 'foo'
 
-        self.call_p = mock.patch.object(self.proxy, 'call')
+        self.call_p = mock.patch.object(self.proxy.client, 'call')
         self.call = self.call_p.start()
-        self.make_msg_p = mock.patch.object(self.proxy, 'make_msg')
-        self.make_msg = self.make_msg_p.start()
 
     def tearDown(self):
-        self.make_msg_p.stop()
         self.call_p.stop()
         super(TestDhcpPluginApiProxy, self).tearDown()
 
@@ -855,20 +852,18 @@ class TestDhcpPluginApiProxy(base.BaseTestCase):
         self.call.return_value = dict(a=1)
         retval = self.proxy.get_network_info('netid')
         self.assertEqual(retval.a, 1)
-        self.assertTrue(self.call.called)
-        self.make_msg.assert_called_once_with('get_network_info',
-                                              network_id='netid',
-                                              host='foo')
+        self.call.assert_called_once_with({}, 'get_network_info',
+                                          network_id='netid',
+                                          host='foo')
 
     def test_get_dhcp_port(self):
         self.call.return_value = dict(a=1)
         retval = self.proxy.get_dhcp_port('netid', 'devid')
         self.assertEqual(retval.a, 1)
-        self.assertTrue(self.call.called)
-        self.make_msg.assert_called_once_with('get_dhcp_port',
-                                              network_id='netid',
-                                              device_id='devid',
-                                              host='foo')
+        self.call.assert_called_once_with({}, 'get_dhcp_port',
+                                          network_id='netid',
+                                          device_id='devid',
+                                          host='foo')
 
     def test_get_dhcp_port_none(self):
         self.call.return_value = None
@@ -876,8 +871,8 @@ class TestDhcpPluginApiProxy(base.BaseTestCase):
 
     def test_get_active_networks_info(self):
         self.proxy.get_active_networks_info()
-        self.make_msg.assert_called_once_with('get_active_networks_info',
-                                              host='foo')
+        self.call.assert_called_once_with({}, 'get_active_networks_info',
+                                          host='foo')
 
     def test_create_dhcp_port(self):
         port_body = (
@@ -889,9 +884,9 @@ class TestDhcpPluginApiProxy(base.BaseTestCase):
                  'device_id': mock.ANY}})
 
         self.proxy.create_dhcp_port(port_body)
-        self.make_msg.assert_called_once_with('create_dhcp_port',
-                                              port=port_body,
-                                              host='foo')
+        self.call.assert_called_once_with({}, 'create_dhcp_port',
+                                          port=port_body,
+                                          host='foo')
 
     def test_create_dhcp_port_none(self):
         self.call.return_value = None
@@ -915,27 +910,27 @@ class TestDhcpPluginApiProxy(base.BaseTestCase):
         port_body = {'port': {'fixed_ips':
                               [{'subnet_id': fake_fixed_ip1.subnet_id}]}}
         self.proxy.update_dhcp_port(fake_port1.id, port_body)
-        self.make_msg.assert_called_once_with('update_dhcp_port',
-                                              port_id=fake_port1.id,
-                                              port=port_body,
-                                              host='foo')
+        self.call.assert_called_once_with({}, 'update_dhcp_port',
+                                          port_id=fake_port1.id,
+                                          port=port_body,
+                                          host='foo')
 
     def test_release_dhcp_port(self):
         self.proxy.release_dhcp_port('netid', 'devid')
         self.assertTrue(self.call.called)
-        self.make_msg.assert_called_once_with('release_dhcp_port',
-                                              network_id='netid',
-                                              device_id='devid',
-                                              host='foo')
+        self.call.assert_called_once_with({}, 'release_dhcp_port',
+                                          network_id='netid',
+                                          device_id='devid',
+                                          host='foo')
 
     def test_release_port_fixed_ip(self):
         self.proxy.release_port_fixed_ip('netid', 'devid', 'subid')
         self.assertTrue(self.call.called)
-        self.make_msg.assert_called_once_with('release_port_fixed_ip',
-                                              network_id='netid',
-                                              subnet_id='subid',
-                                              device_id='devid',
-                                              host='foo')
+        self.call.assert_called_once_with({}, 'release_port_fixed_ip',
+                                          network_id='netid',
+                                          subnet_id='subid',
+                                          device_id='devid',
+                                          host='foo')
 
 
 class TestNetworkCache(base.BaseTestCase):

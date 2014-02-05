@@ -44,7 +44,6 @@ from neutron.openstack.common import log as logging
 from neutron.openstack.common import threadgroup
 
 
-rpc = importutils.try_import('neutron.openstack.common.rpc')
 CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
@@ -179,12 +178,6 @@ class ServiceLauncher(Launcher):
             status = exc.code
         finally:
             self.stop()
-            if rpc:
-                try:
-                    rpc.cleanup()
-                except Exception:
-                    # We're shutting down, so it doesn't matter at this point.
-                    LOG.exception(_('Exception during rpc cleanup.'))
 
         return status, signo
 

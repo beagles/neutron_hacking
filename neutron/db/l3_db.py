@@ -13,6 +13,7 @@
 #    under the License.
 
 import netaddr
+from oslo.config import cfg
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.orm import exc
@@ -21,12 +22,12 @@ from neutron.api.rpc.agentnotifiers import l3_rpc_agent_api
 from neutron.api.v2 import attributes
 from neutron.common import constants as l3_constants
 from neutron.common import exceptions as n_exc
+from neutron.common import rpc
 from neutron.db import model_base
 from neutron.db import models_v2
 from neutron.extensions import l3
 from neutron import manager
 from neutron.openstack.common import log as logging
-from neutron.openstack.common.notifier import api as notifier_api
 from neutron.openstack.common import uuidutils
 from neutron.plugins.common import constants
 
@@ -78,7 +79,9 @@ class FloatingIP(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
 class L3_NAT_db_mixin(l3.RouterPluginBase):
     """Mixin class to add L3/NAT router methods to db_plugin_base_v2."""
 
-    l3_rpc_notifier = l3_rpc_agent_api.L3AgentNotify
+    def __init__(self):
+        super(L3_NAT_db_mixin, self).__init__()
+        self.l3_rpc_notifier = l3_rpc_agent_api.L3AgentNotifyAPI()
 
     @property
     def _core_plugin(self):
@@ -360,11 +363,11 @@ class L3_NAT_db_mixin(l3.RouterPluginBase):
                 'tenant_id': subnet['tenant_id'],
                 'port_id': port['id'],
                 'subnet_id': port['fixed_ips'][0]['subnet_id']}
-        notifier_api.notify(context,
-                            notifier_api.publisher_id('network'),
-                            'router.interface.create',
-                            notifier_api.CONF.default_notification_level,
-                            {'router.interface': info})
+        notifier = rpc.get_notifier(service='network')
+        notifier._notify(context,
+                         'router.interface.create',
+                         {'router.interface': info},
+                         cfg.CONF.default_notification_level)
         return info
 
     def _confirm_router_interface_not_in_use(self, context, router_id,
@@ -434,11 +437,11 @@ class L3_NAT_db_mixin(l3.RouterPluginBase):
                 'tenant_id': subnet['tenant_id'],
                 'port_id': port_id,
                 'subnet_id': subnet_id}
-        notifier_api.notify(context,
-                            notifier_api.publisher_id('network'),
-                            'router.interface.delete',
-                            notifier_api.CONF.default_notification_level,
-                            {'router.interface': info})
+        notifier = rpc.get_notifier(service='network')
+        notifier._notify(context,
+                         'router.interface.delete',
+                         {'router.interface': info},
+                         cfg.CONF.default_notification_level)
         return info
 
     def _get_floatingip(self, context, id):

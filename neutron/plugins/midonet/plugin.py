@@ -24,12 +24,13 @@
 
 from midonetclient import api
 from oslo.config import cfg
+from oslo import messaging
 from sqlalchemy.orm import exc as sa_exc
 
 from neutron.api.v2 import attributes
 from neutron.common import constants
 from neutron.common import exceptions as n_exc
-from neutron.common import rpc as n_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.db import agents_db
 from neutron.db import agentschedulers_db
@@ -46,7 +47,7 @@ from neutron.extensions import portbindings
 from neutron.extensions import securitygroup as ext_sg
 from neutron.openstack.common import excutils
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
+
 from neutron.plugins.midonet.common import config  # noqa
 from neutron.plugins.midonet.common import net_util
 from neutron.plugins.midonet import midonet_lib
@@ -178,18 +179,7 @@ def _check_resource_exists(func, id, name, raise_exc=False):
 
 
 class MidoRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin):
-    RPC_API_VERSION = '1.1'
-
-    def create_rpc_dispatcher(self):
-        """Get the rpc dispatcher for this manager.
-
-        This a basic implementation that will call the plugin like get_ports
-        and handle basic events
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        """
-        return n_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
+    target = messaging.Target(version='1.1')
 
 
 class MidonetPluginException(n_exc.NeutronException):
@@ -381,14 +371,10 @@ class MidonetPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
 
     def setup_rpc(self):
         # RPC support
-        self.topic = topics.PLUGIN
-        self.conn = rpc.create_connection(new=True)
-        self.callbacks = MidoRpcCallbacks()
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
-        self.conn.create_consumer(self.topic, self.dispatcher,
-                                  fanout=False)
-        # Consume from all consumers in a thread
-        self.conn.consume_in_thread()
+        self.callbacks = [MidoRpcCallbacks(), agents_db.AgentExtRpcCallback()]
+        target = messaging.Target(topic=topics.PLUGIN, server=cfg.CONF.host)
+        self.rpc_server = rpc.get_server(target, self.callbacks)
+        self.rpc_server.start()
 
     def create_subnet(self, context, subnet):
         """Create Neutron subnet.

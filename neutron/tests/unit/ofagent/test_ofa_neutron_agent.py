@@ -20,12 +20,12 @@ import contextlib
 
 import mock
 from oslo.config import cfg
+from oslo import messaging
 import testtools
 
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import utils
 from neutron.openstack.common import importutils
-from neutron.openstack.common.rpc import common as rpc_common
 from neutron.plugins.common import constants as p_const
 from neutron.plugins.openvswitch.common import constants
 from neutron.tests import base
@@ -430,14 +430,14 @@ class TestOFANeutronAgent(OFAAgentTestCase):
             mock.patch.object(self.agent.plugin_rpc, 'update_device_down'),
             mock.patch.object(self.agent, 'port_dead')
         ) as (log, _, device_up, _, device_down, _):
-            device_up.side_effect = rpc_common.Timeout
+            device_up.side_effect = messaging.Timeout
             self.agent.port_update(mock.Mock(), port=port)
             self.assertTrue(device_up.called)
             self.assertEqual(log.call_count, 1)
 
             log.reset_mock()
             port['admin_state_up'] = False
-            device_down.side_effect = rpc_common.Timeout
+            device_down.side_effect = messaging.Timeout
             self.agent.port_update(mock.Mock(), port=port)
             self.assertTrue(device_down.called)
             self.assertEqual(log.call_count, 1)

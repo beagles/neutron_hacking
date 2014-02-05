@@ -79,10 +79,9 @@ class TestMeteringPlugin(test_db_plugin.NeutronDbPluginV2TestCase,
         self.uuid_patch = mock.patch(uuid, return_value=self.uuid)
         self.mock_uuid = self.uuid_patch.start()
 
-        fanout = ('neutron.openstack.common.rpc.proxy.RpcProxy.'
-                  'fanout_cast')
-        self.fanout_patch = mock.patch(fanout)
-        self.mock_fanout = self.fanout_patch.start()
+        prepare = ('oslo.messaging.rpc.RPCClient.prepare')
+        self.prepare_patch = mock.patch(prepare)
+        self.mock_prepare = self.prepare_patch.start()
 
         self.tenant_id = 'a7e61382-47b8-4d40-bae3-f95981b5637b'
         self.ctx = context.Context('', self.tenant_id, is_admin=True)
@@ -94,17 +93,15 @@ class TestMeteringPlugin(test_db_plugin.NeutronDbPluginV2TestCase,
 
     def test_add_metering_label_rpc_call(self):
         second_uuid = 'e27fe2df-376e-4ac7-ae13-92f050a21f84'
-        expected = {'args': {'routers': [{'status': 'ACTIVE',
-                                          'name': 'router1',
-                                          'gw_port_id': None,
-                                          'admin_state_up': True,
-                                          'tenant_id': self.tenant_id,
-                                          '_metering_labels': [
-                                              {'rules': [],
-                                               'id': self.uuid}],
-                                          'id': self.uuid}]},
-                    'namespace': None,
-                    'method': 'add_metering_label'}
+        expected = [{'status': 'ACTIVE',
+                     'name': 'router1',
+                     'gw_port_id': None,
+                     'admin_state_up': True,
+                     'tenant_id': self.tenant_id,
+                     '_metering_labels': [
+                         {'rules': [],
+                          'id': self.uuid}],
+                     'id': self.uuid}]
 
         tenant_id_2 = '8a268a58-1610-4890-87e0-07abb8231206'
         self.mock_uuid.return_value = second_uuid
@@ -115,60 +112,50 @@ class TestMeteringPlugin(test_db_plugin.NeutronDbPluginV2TestCase,
                              set_context=True):
                 with self.metering_label(tenant_id=self.tenant_id,
                                          set_context=True):
-                    self.mock_fanout.assert_called_with(self.ctx, expected,
-                                                        topic=self.topic)
+                    self.mock_prepare.return_value.cast.assert_called_with(
+                        self.ctx, 'add_metering_label', routers=expected)
 
     def test_remove_metering_label_rpc_call(self):
-        expected = {'args':
-                    {'routers': [{'status': 'ACTIVE',
-                                  'name': 'router1',
-                                  'gw_port_id': None,
-                                  'admin_state_up': True,
-                                  'tenant_id': self.tenant_id,
-                                  '_metering_labels': [
-                                      {'rules': [],
-                                       'id': self.uuid}],
-                                  'id': self.uuid}]},
-                    'namespace': None,
-                    'method': 'add_metering_label'}
+        expected = [{'status': 'ACTIVE',
+                     'name': 'router1',
+                     'gw_port_id': None,
+                     'admin_state_up': True,
+                     'tenant_id': self.tenant_id,
+                     '_metering_labels': [
+                         {'rules': [],
+                          'id': self.uuid}],
+                     'id': self.uuid}]
 
         with self.router(tenant_id=self.tenant_id, set_context=True):
             with self.metering_label(tenant_id=self.tenant_id,
                                      set_context=True):
-                self.mock_fanout.assert_called_with(self.ctx, expected,
-                                                    topic=self.topic)
-            expected['method'] = 'remove_metering_label'
-            self.mock_fanout.assert_called_with(self.ctx, expected,
-                                                topic=self.topic)
+                self.mock_prepare.return_value.cast.assert_called_with(
+                    self.ctx, 'add_metering_label', routers=expected)
+            self.mock_prepare.return_value.cast.assert_called_with(
+                self.ctx, 'remove_metering_label', routers=expected)
 
     def test_remove_one_metering_label_rpc_call(self):
         second_uuid = 'e27fe2df-376e-4ac7-ae13-92f050a21f84'
-        expected_add = {'args':
-                        {'routers': [{'status': 'ACTIVE',
-                                      'name': 'router1',
-                                      'gw_port_id': None,
-                                      'admin_state_up': True,
-                                      'tenant_id': self.tenant_id,
-                                      '_metering_labels': [
-                                          {'rules': [],
-                                           'id': self.uuid},
-                                          {'rules': [],
-                                           'id': second_uuid}],
-                                      'id': self.uuid}]},
-                        'namespace': None,
-                        'method': 'add_metering_label'}
-        expected_remove = {'args':
-                           {'routers': [{'status': 'ACTIVE',
-                                         'name': 'router1',
-                                         'gw_port_id': None,
-                                         'admin_state_up': True,
-                                         'tenant_id': self.tenant_id,
-                                         '_metering_labels': [
-                                             {'rules': [],
-                                              'id': second_uuid}],
-                                         'id': self.uuid}]},
-                           'namespace': None,
-                           'method': 'remove_metering_label'}
+        expected_add = [{'status': 'ACTIVE',
+                         'name': 'router1',
+                         'gw_port_id': None,
+                         'admin_state_up': True,
+                         'tenant_id': self.tenant_id,
+                         '_metering_labels': [
+                             {'rules': [],
+                              'id': self.uuid},
+                             {'rules': [],
+                              'id': second_uuid}],
+                         'id': self.uuid}]
+        expected_remove = [{'status': 'ACTIVE',
+                            'name': 'router1',
+                            'gw_port_id': None,
+                            'admin_state_up': True,
+                            'tenant_id': self.tenant_id,
+                            '_metering_labels': [
+                                {'rules': [],
+                                 'id': second_uuid}],
+                            'id': self.uuid}]
 
         with self.router(tenant_id=self.tenant_id, set_context=True):
             with self.metering_label(tenant_id=self.tenant_id,
@@ -176,55 +163,47 @@ class TestMeteringPlugin(test_db_plugin.NeutronDbPluginV2TestCase,
                 self.mock_uuid.return_value = second_uuid
                 with self.metering_label(tenant_id=self.tenant_id,
                                          set_context=True):
-                    self.mock_fanout.assert_called_with(self.ctx, expected_add,
-                                                        topic=self.topic)
-                self.mock_fanout.assert_called_with(self.ctx, expected_remove,
-                                                    topic=self.topic)
+                    self.mock_prepare.return_value.cast.assert_called_with(
+                        self.ctx, 'add_metering_label', routers=expected_add)
+                self.mock_prepare.return_value.cast.assert_called_with(
+                    self.ctx, 'remove_metering_label', routers=expected_remove)
 
     def test_update_metering_label_rules_rpc_call(self):
         second_uuid = 'e27fe2df-376e-4ac7-ae13-92f050a21f84'
-        expected_add = {'args':
-                        {'routers': [
-                            {'status': 'ACTIVE',
-                             'name': 'router1',
-                             'gw_port_id': None,
-                             'admin_state_up': True,
-                             'tenant_id': self.tenant_id,
-                             '_metering_labels': [
-                                 {'rules': [
-                                     {'remote_ip_prefix': '10.0.0.0/24',
-                                      'direction': 'ingress',
-                                      'metering_label_id': self.uuid,
-                                      'excluded': False,
-                                      'id': self.uuid},
-                                     {'remote_ip_prefix': '10.0.0.0/24',
-                                      'direction': 'egress',
-                                      'metering_label_id': self.uuid,
-                                      'excluded': False,
-                                      'id': second_uuid}],
-                                  'id': self.uuid}],
-                             'id': self.uuid}]},
-                        'namespace': None,
-                        'method': 'update_metering_label_rules'}
+        expected_add = [{'status': 'ACTIVE',
+                         'name': 'router1',
+                         'gw_port_id': None,
+                         'admin_state_up': True,
+                         'tenant_id': self.tenant_id,
+                         '_metering_labels': [
+                             {'rules': [
+                                 {'remote_ip_prefix': '10.0.0.0/24',
+                                  'direction': 'ingress',
+                                  'metering_label_id': self.uuid,
+                                  'excluded': False,
+                                  'id': self.uuid},
+                                 {'remote_ip_prefix': '10.0.0.0/24',
+                                  'direction': 'egress',
+                                  'metering_label_id': self.uuid,
+                                  'excluded': False,
+                                  'id': second_uuid}],
+                              'id': self.uuid}],
+                         'id': self.uuid}]
 
-        expected_del = {'args':
-                        {'routers': [
-                            {'status': 'ACTIVE',
-                             'name': 'router1',
-                             'gw_port_id': None,
-                             'admin_state_up': True,
-                             'tenant_id': self.tenant_id,
-                             '_metering_labels': [
-                                 {'rules': [
-                                     {'remote_ip_prefix': '10.0.0.0/24',
-                                      'direction': 'ingress',
-                                      'metering_label_id': self.uuid,
-                                      'excluded': False,
-                                      'id': self.uuid}],
+        expected_del = [{'status': 'ACTIVE',
+                         'name': 'router1',
+                         'gw_port_id': None,
+                         'admin_state_up': True,
+                         'tenant_id': self.tenant_id,
+                         '_metering_labels': [
+                             {'rules': [
+                                 {'remote_ip_prefix': '10.0.0.0/24',
+                                  'direction': 'ingress',
+                                  'metering_label_id': self.uuid,
+                                  'excluded': False,
                                   'id': self.uuid}],
-                             'id': self.uuid}]},
-                        'namespace': None,
-                        'method': 'update_metering_label_rules'}
+                              'id': self.uuid}],
+                         'id': self.uuid}]
 
         with self.router(tenant_id=self.tenant_id, set_context=True):
             with self.metering_label(tenant_id=self.tenant_id,
@@ -233,12 +212,12 @@ class TestMeteringPlugin(test_db_plugin.NeutronDbPluginV2TestCase,
                 with self.metering_label_rule(l['id']):
                     self.mock_uuid.return_value = second_uuid
                     with self.metering_label_rule(l['id'], direction='egress'):
-                        self.mock_fanout.assert_called_with(self.ctx,
-                                                            expected_add,
-                                                            topic=self.topic)
-                    self.mock_fanout.assert_called_with(self.ctx,
-                                                        expected_del,
-                                                        topic=self.topic)
+                        self.mock_prepare.return_value.cast.assert_called_with(
+                            self.ctx, 'update_metering_label_rules',
+                            routers=expected_add)
+                    self.mock_prepare.return_value.cast.assert_called_with(
+                        self.ctx, 'update_metering_label_rules',
+                        routers=expected_del)
 
     def test_delete_metering_label_does_not_clear_router_tenant_id(self):
         tenant_id = '654f6b9d-0f36-4ae5-bd1b-01616794ca60'
@@ -285,9 +264,9 @@ class TestMeteringPluginL3AgentScheduler(
         self.uuid_patch = mock.patch(uuid, return_value=self.uuid)
         self.mock_uuid = self.uuid_patch.start()
 
-        cast = 'neutron.openstack.common.rpc.proxy.RpcProxy.cast'
-        self.cast_patch = mock.patch(cast)
-        self.mock_cast = self.cast_patch.start()
+        prepare = 'oslo.messaging.rpc.RPCClient.prepare'
+        self.prepare_patch = mock.patch(prepare)
+        self.mock_prepare = self.prepare_patch.start()
 
         self.tenant_id = 'a7e61382-47b8-4d40-bae3-f95981b5637b'
         self.ctx = context.Context('', self.tenant_id, is_admin=True)
@@ -303,26 +282,24 @@ class TestMeteringPluginL3AgentScheduler(
 
     def test_add_metering_label_rpc_call(self):
         second_uuid = 'e27fe2df-376e-4ac7-ae13-92f050a21f84'
-        expected = {'args': {'routers': [{'status': 'ACTIVE',
-                                          'name': 'router1',
-                                          'gw_port_id': None,
-                                          'admin_state_up': True,
-                                          'tenant_id': self.tenant_id,
-                                          '_metering_labels': [
-                                              {'rules': [],
-                                               'id': second_uuid}],
-                                          'id': self.uuid},
-                                         {'status': 'ACTIVE',
-                                          'name': 'router2',
-                                          'gw_port_id': None,
-                                          'admin_state_up': True,
-                                          'tenant_id': self.tenant_id,
-                                          '_metering_labels': [
-                                              {'rules': [],
-                                               'id': second_uuid}],
-                                          'id': second_uuid}]},
-                    'namespace': None,
-                    'method': 'add_metering_label'}
+        expected = [{'status': 'ACTIVE',
+                     'name': 'router1',
+                     'gw_port_id': None,
+                     'admin_state_up': True,
+                     'tenant_id': self.tenant_id,
+                     '_metering_labels': [
+                         {'rules': [],
+                          'id': second_uuid}],
+                     'id': self.uuid},
+                    {'status': 'ACTIVE',
+                     'name': 'router2',
+                     'gw_port_id': None,
+                     'admin_state_up': True,
+                     'tenant_id': self.tenant_id,
+                     '_metering_labels': [
+                         {'rules': [],
+                          'id': second_uuid}],
+                     'id': second_uuid}]
 
         agent_host = 'l3_agent_host'
         agent = agents_db.Agent(host=agent_host)
@@ -335,7 +312,7 @@ class TestMeteringPluginL3AgentScheduler(
                              set_context=True):
                 with self.metering_label(tenant_id=self.tenant_id,
                                          set_context=True):
-                    topic = "%s.%s" % (self.topic, agent_host)
-                    self.mock_cast.assert_called_with(self.ctx,
-                                                      expected,
-                                                      topic=topic)
+                    self.mock_prepare.return_value.cast.assert_called_with(
+                        self.ctx,
+                        'add_metering_label',
+                        routers=expected)

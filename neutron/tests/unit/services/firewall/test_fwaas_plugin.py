@@ -40,7 +40,7 @@ class TestFirewallCallbacks(test_db_firewall.FirewallPluginDbTestCase):
     def setUp(self):
         super(TestFirewallCallbacks,
               self).setUp(fw_plugin=FW_PLUGIN_KLASS)
-        self.callbacks = self.plugin.callbacks
+        self.callbacks = self.plugin.callbacks[0]
 
     def test_set_firewall_status(self):
         ctx = context.get_admin_context()
@@ -157,27 +157,21 @@ class TestFirewallAgentApi(base.BaseTestCase):
         self.addCleanup(mock.patch.stopall)
 
         self.api = fwaas_plugin.FirewallAgentApi('topic', 'host')
-        self.mock_fanoutcast = mock.patch.object(self.api,
-                                                 'fanout_cast').start()
-        self.mock_msg = mock.patch.object(self.api, 'make_msg').start()
+        self.mock_prepare = mock.patch.object(self.api.client,
+                                              'prepare').start()
 
     def test_init(self):
-        self.assertEqual(self.api.topic, 'topic')
+        self.assertEqual(self.api.client.target.topic, 'topic')
         self.assertEqual(self.api.host, 'host')
 
     def _call_test_helper(self, method_name):
         rv = getattr(self.api, method_name)(mock.sentinel.context, 'test')
-        self.assertEqual(rv, self.mock_fanoutcast.return_value)
-        self.mock_fanoutcast.assert_called_once_with(
+        self.assertEqual(rv, self.mock_prepare.return_value.cast.return_value)
+        self.mock_prepare.return_value.cast.assert_called_once_with(
             mock.sentinel.context,
-            self.mock_msg.return_value,
-            topic='topic'
-        )
-
-        self.mock_msg.assert_called_once_with(
             method_name,
             firewall='test',
-            host='host'
+            host='host',
         )
 
     def test_create_firewall(self):
@@ -194,7 +188,7 @@ class TestFirewallPluginBase(test_db_firewall.TestFirewallDBPlugin):
 
     def setUp(self):
         super(TestFirewallPluginBase, self).setUp(fw_plugin=FW_PLUGIN_KLASS)
-        self.callbacks = self.plugin.callbacks
+        self.callbacks = self.plugin.callbacks[0]
 
     def test_create_second_firewall_not_permitted(self):
         with self.firewall(no_delete=True):
@@ -311,7 +305,7 @@ class TestFirewallPluginBase(test_db_firewall.TestFirewallDBPlugin):
                     req = self.new_delete_request('firewalls', fw_id)
                     res = req.get_response(self.ext_api)
                     self.assertEqual(res.status_int, 204)
-                    self.plugin.callbacks.firewall_deleted(ctx, fw_id)
+                    self.plugin.callbacks[0].firewall_deleted(ctx, fw_id)
                     self.assertRaises(firewall.FirewallNotFound,
                                       self.plugin.get_firewall,
                                       ctx, fw_id)

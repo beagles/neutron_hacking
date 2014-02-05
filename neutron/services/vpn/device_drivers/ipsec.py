@@ -23,17 +23,18 @@ import shutil
 import jinja2
 import netaddr
 from oslo.config import cfg
+from oslo import messaging
 import six
 
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import utils
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron import context
 from neutron.openstack.common import lockutils
 from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
-from neutron.openstack.common import rpc
-from neutron.openstack.common.rpc import proxy
+
+
 from neutron.plugins.common import constants
 from neutron.plugins.common import utils as plugin_utils
 from neutron.services.vpn.common import topics
@@ -442,9 +443,15 @@ class OpenSwanProcess(BaseSwanProcess):
         self.connection_status = {}
 
 
-class IPsecVpnDriverApi(proxy.RpcProxy):
+class IPsecVpnDriverApi(object):
     """IPSecVpnDriver RPC api."""
     IPSEC_PLUGIN_VERSION = '1.0'
+
+    def __init__(self, topic, default_version):
+        super(IPsecVpnDriverApi, self).__init__()
+        target = messaging.Target(topic=topic,
+                                  version=self.IPSEC_PLUGIN_VERSION)
+        self.client = rpc.get_client(target)
 
     def get_vpn_services_on_host(self, context, host):
         """Get list of vpnservices.
@@ -452,11 +459,7 @@ class IPsecVpnDriverApi(proxy.RpcProxy):
         The vpnservices including related ipsec_site_connection,
         ikepolicy and ipsecpolicy on this host
         """
-        return self.call(context,
-                         self.make_msg('get_vpn_services_on_host',
-                                       host=host),
-                         version=self.IPSEC_PLUGIN_VERSION,
-                         topic=self.topic)
+        return self.client.call(context, 'get_vpn_services_on_host', host=host)
 
     def update_status(self, context, status):
         """Update local status.
@@ -464,11 +467,7 @@ class IPsecVpnDriverApi(proxy.RpcProxy):
         This method call updates status attribute of
         VPNServices.
         """
-        return self.cast(context,
-                         self.make_msg('update_status',
-                                       status=status),
-                         version=self.IPSEC_PLUGIN_VERSION,
-                         topic=self.topic)
+        return self.client.cast(context, 'update_status', status=status)
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -483,35 +482,28 @@ class IPsecDriver(device_drivers.DeviceDriver):
 
     # history
     #   1.0 Initial version
-
-    RPC_API_VERSION = '1.0'
+    target = messaging.Target(version='1.0')
 
     def __init__(self, agent, host):
         self.agent = agent
         self.conf = self.agent.conf
         self.root_helper = self.agent.root_helper
         self.host = host
-        self.conn = rpc.create_connection(new=True)
+        target = messaging.Target(server=host,
+                                  topic=topics.IPSEC_AGENT_TOPIC)
+        self.callbacks = [self]
+        self.rpc_server = rpc.get_server(target, endpoints=self.callbacks)
+        self.rpc_server.start()
         self.context = context.get_admin_context_without_session()
-        self.topic = topics.IPSEC_AGENT_TOPIC
-        node_topic = '%s.%s' % (self.topic, self.host)
 
         self.processes = {}
         self.process_status_cache = {}
 
-        self.conn.create_consumer(
-            node_topic,
-            self.create_rpc_dispatcher(),
-            fanout=False)
-        self.conn.consume_in_thread()
         self.agent_rpc = IPsecVpnDriverApi(topics.IPSEC_DRIVER_TOPIC, '1.0')
         self.process_status_cache_check = loopingcall.FixedIntervalLoopingCall(
             self.report_status, self.context)
         self.process_status_cache_check.start(
             interval=self.conf.ipsec.ipsec_status_check_interval)
-
-    def create_rpc_dispatcher(self):
-        return q_rpc.PluginRpcDispatcher([self])
 
     def _update_nat(self, vpnservice, func):
         """Setting up nat rule in iptables.

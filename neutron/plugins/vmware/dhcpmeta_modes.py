@@ -16,13 +16,15 @@
 #
 
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
 from neutron.common import constants as const
+from neutron.common import rpc
 from neutron.common import topics
+from neutron.db import agents_db
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
 from neutron.plugins.vmware.common import config
 from neutron.plugins.vmware.common import exceptions as nsx_exc
 from neutron.plugins.vmware.dhcp_meta import combined
@@ -68,13 +70,14 @@ class DhcpMetadataAccess(object):
         )
 
     def _setup_rpc_dhcp_metadata(self, notifier=None):
-        self.topic = topics.PLUGIN
-        self.conn = rpc.create_connection(new=True)
-        self.dispatcher = nsx_rpc.NSXRpcCallbacks().create_rpc_dispatcher()
-        self.conn.create_consumer(self.topic, self.dispatcher, fanout=False)
+        self.callbacks = [nsx_rpc.NSXRpcCallbacks(),
+                          agents_db.AgentExtRpcCallback()]
+        target = messaging.Target(topic=topics.PLUGIN, server=cfg.CONF.host)
+        self.rpc_server = rpc.get_server(target, self.callbacks)
+        self.rpc_server.start()
+
         self.agent_notifiers[const.AGENT_TYPE_DHCP] = (
             notifier or dhcp_rpc_agent_api.DhcpAgentNotifyAPI())
-        self.conn.consume_in_thread()
         self.network_scheduler = importutils.import_object(
             cfg.CONF.network_scheduler_driver
         )

@@ -51,11 +51,9 @@ class SecurityGroupServerRpcApiMixin(object):
     def security_group_rules_for_devices(self, context, devices):
         LOG.debug(_("Get security group rules "
                     "for devices via rpc %r"), devices)
-        return self.call(context,
-                         self.make_msg('security_group_rules_for_devices',
-                                       devices=devices),
-                         version=SG_RPC_VERSION,
-                         topic=self.topic)
+        cctxt = self.client.prepare(version=SG_RPC_VERSION)
+        return cctxt.call(context, 'security_group_rules_for_devices',
+                          devices=devices)
 
 
 class SecurityGroupAgentRpcCallbackMixin(object):
@@ -238,7 +236,7 @@ class SecurityGroupAgentRpcMixin(object):
 class SecurityGroupAgentRpcApiMixin(object):
 
     def _get_security_group_topic(self):
-        return topics.get_topic_name(self.topic,
+        return topics.get_topic_name(self.client.target.topic,
                                      topics.SECURITY_GROUP,
                                      topics.UPDATE)
 
@@ -246,25 +244,25 @@ class SecurityGroupAgentRpcApiMixin(object):
         """Notify rule updated security groups."""
         if not security_groups:
             return
-        self.fanout_cast(context,
-                         self.make_msg('security_groups_rule_updated',
-                                       security_groups=security_groups),
-                         version=SG_RPC_VERSION,
-                         topic=self._get_security_group_topic())
+        cctxt = self.client.prepare(fanout=True,
+                                    version=SG_RPC_VERSION,
+                                    topic=self._get_security_group_topic())
+        cctxt.cast(context, 'security_groups_rule_updated',
+                   security_groups=security_groups)
 
     def security_groups_member_updated(self, context, security_groups):
         """Notify member updated security groups."""
         if not security_groups:
             return
-        self.fanout_cast(context,
-                         self.make_msg('security_groups_member_updated',
-                                       security_groups=security_groups),
-                         version=SG_RPC_VERSION,
-                         topic=self._get_security_group_topic())
+        cctxt = self.client.prepare(fanout=True,
+                                    version=SG_RPC_VERSION,
+                                    topic=self._get_security_group_topic())
+        cctxt.cast(context, 'security_groups_member_updated',
+                   security_groups=security_groups)
 
     def security_groups_provider_updated(self, context):
         """Notify provider updated security groups."""
-        self.fanout_cast(context,
-                         self.make_msg('security_groups_provider_updated'),
-                         version=SG_RPC_VERSION,
-                         topic=self._get_security_group_topic())
+        cctxt = self.client.prepare(fanout=True,
+                                    version=SG_RPC_VERSION,
+                                    topic=self._get_security_group_topic())
+        cctxt.cast(context, 'security_groups_provider_updated')

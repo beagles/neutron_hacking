@@ -17,12 +17,13 @@
 """Implementation of OneConvergence Neutron Plugin."""
 
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
 from neutron.api.rpc.agentnotifiers import l3_rpc_agent_api
 from neutron.common import constants as q_const
 from neutron.common import exceptions as nexception
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.db import agents_db
 from neutron.db import agentschedulers_db
@@ -39,7 +40,6 @@ from neutron.extensions import portbindings
 from neutron.openstack.common import excutils
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
 from neutron.plugins.common import constants as svc_constants
 import neutron.plugins.oneconvergence.lib.config  # noqa
 import neutron.plugins.oneconvergence.lib.exception as nvsdexception
@@ -54,12 +54,7 @@ class NVSDRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
 
     """Agent callback."""
 
-    RPC_API_VERSION = '1.1'
-
-    def create_rpc_dispatcher(self):
-        """Get the rpc dispatcher for this manager."""
-        return q_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
+    target = messaging.Target(version='1.1')
 
 
 class OneConvergencePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
@@ -117,22 +112,24 @@ class OneConvergencePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
 
     def setup_rpc(self):
         # RPC support
-        self.service_topics = {svc_constants.CORE: topics.PLUGIN,
-                               svc_constants.L3_ROUTER_NAT: topics.L3PLUGIN}
-        self.conn = rpc.create_connection(new=True)
         self.agent_notifiers[q_const.AGENT_TYPE_DHCP] = (
             dhcp_rpc_agent_api.DhcpAgentNotifyAPI()
         )
         self.agent_notifiers[q_const.AGENT_TYPE_L3] = (
-            l3_rpc_agent_api.L3AgentNotify
+            l3_rpc_agent_api.L3AgentNotifyAPI()
         )
-        self.callbacks = NVSDRpcCallbacks()
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
-        for svc_topic in self.service_topics.values():
-            self.conn.create_consumer(svc_topic, self.dispatcher, fanout=False)
 
-        # Consume from all consumers in a thread
-        self.conn.consume_in_thread()
+        self.callbacks = [NVSDRpcCallbacks(), agents_db.AgentExtRpcCallback()]
+        self.rpc_servers = []
+
+        self.service_topics = {svc_constants.CORE: topics.PLUGIN,
+                               svc_constants.L3_ROUTER_NAT: topics.L3PLUGIN}
+
+        for svc_topic in self.service_topics.values():
+            target = messaging.Target(topic=svc_topic, server=cfg.CONF.host)
+            rpc_server = rpc.get_server(target, self.callbacks)
+            rpc_server.start()
+            self.rpc_servers.append(rpc_server)
 
     def create_network(self, context, network):
 

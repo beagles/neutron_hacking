@@ -14,6 +14,7 @@
 #    under the License.
 
 from oslo.config import cfg
+from oslo import messaging
 from sqlalchemy import exc as sql_exc
 from sqlalchemy.orm import exc as sa_exc
 
@@ -22,7 +23,9 @@ from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
 from neutron.api.v2 import attributes
 from neutron.common import constants as const
 from neutron.common import exceptions as exc
+from neutron.common import rpc as neutron_rpc
 from neutron.common import topics
+from neutron.db import agents_db
 from neutron.db import agentschedulers_db
 from neutron.db import allowedaddresspairs_db as addr_pair_db
 from neutron.db import db_base_plugin_v2
@@ -42,7 +45,6 @@ from neutron.openstack.common import excutils
 from neutron.openstack.common import importutils
 from neutron.openstack.common import jsonutils
 from neutron.openstack.common import log
-from neutron.openstack.common import rpc as c_rpc
 from neutron.plugins.common import constants as service_constants
 from neutron.plugins.ml2.common import exceptions as ml2_exc
 from neutron.plugins.ml2 import config  # noqa
@@ -124,13 +126,14 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
         )
 
     def start_rpc_listener(self):
-        self.callbacks = rpc.RpcCallbacks(self.notifier, self.type_manager)
-        self.topic = topics.PLUGIN
-        self.conn = c_rpc.create_connection(new=True)
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
-        self.conn.create_consumer(self.topic, self.dispatcher,
-                                  fanout=False)
-        return self.conn.consume_in_thread()
+        self.callbacks = [rpc.RpcCallbacks(self.notifier, self.type_manager),
+                          agents_db.AgentExtRpcCallback()]
+
+        target = messaging.Target(topic=topics.PLUGIN, server=cfg.CONF.host)
+        self.rpc_server = neutron_rpc.get_server(target, self.callbacks)
+        self.rpc_server.start()
+
+        return self.rpc_server
 
     def _process_provider_segment(self, segment):
         network_type = self._get_attribute(segment, provider.NETWORK_TYPE)

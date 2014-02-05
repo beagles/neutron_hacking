@@ -26,8 +26,8 @@ from neutron.api.v2 import attributes
 from neutron.api.v2 import resource as wsgi_resource
 from neutron.common import constants as const
 from neutron.common import exceptions
+from neutron.common import rpc
 from neutron.openstack.common import log as logging
-from neutron.openstack.common.notifier import api as notifier_api
 from neutron import policy
 from neutron import quota
 
@@ -68,7 +68,7 @@ class Controller(object):
         self._native_sorting = self._is_native_sorting_supported()
         self._policy_attrs = [name for (name, info) in self._attr_info.items()
                               if info.get('required_by_policy')]
-        self._publisher_id = notifier_api.publisher_id('network')
+        self.notifier = rpc.get_notifier(publisher_id='network')
         # use plugin's dhcp notifier, if this is already instantiated
         agent_notifiers = getattr(plugin, 'agent_notifiers', {})
         self._dhcp_agent_notifier = (
@@ -337,11 +337,10 @@ class Controller(object):
     def create(self, request, body=None, **kwargs):
         """Creates a new instance of the requested entity."""
         parent_id = kwargs.get(self._parent_id_name)
-        notifier_api.notify(request.context,
-                            self._publisher_id,
-                            self._resource + '.create.start',
-                            notifier_api.CONF.default_notification_level,
-                            body)
+        self.notifier._notify(request.context,
+                              '.'.join([self._resource, 'create.start']),
+                              body,
+                              cfg.CONF.default_notification_level)
         body = Controller.prepare_request_body(request.context, body, True,
                                                self._resource, self._attr_info,
                                                allow_bulk=self._allow_bulk)
@@ -382,11 +381,10 @@ class Controller(object):
 
         def notify(create_result):
             notifier_method = self._resource + '.create.end'
-            notifier_api.notify(request.context,
-                                self._publisher_id,
-                                notifier_method,
-                                notifier_api.CONF.default_notification_level,
-                                create_result)
+            self.notifier._notify(request.context,
+                                  notifier_method,
+                                  create_result,
+                                  cfg.CONF.default_notification_level)
             self._send_dhcp_notification(request.context,
                                          create_result,
                                          notifier_method)
@@ -414,11 +412,10 @@ class Controller(object):
 
     def delete(self, request, id, **kwargs):
         """Deletes the specified entity."""
-        notifier_api.notify(request.context,
-                            self._publisher_id,
-                            self._resource + '.delete.start',
-                            notifier_api.CONF.default_notification_level,
-                            {self._resource + '_id': id})
+        self.notifier._notify(request.context,
+                              '.'.join([self._resource, 'delete.start']),
+                              {self._resource + '_id': id},
+                              cfg.CONF.default_notification_level)
         action = self._plugin_handlers[self.DELETE]
 
         # Check authz
@@ -437,11 +434,10 @@ class Controller(object):
         obj_deleter = getattr(self._plugin, action)
         obj_deleter(request.context, id, **kwargs)
         notifier_method = self._resource + '.delete.end'
-        notifier_api.notify(request.context,
-                            self._publisher_id,
-                            notifier_method,
-                            notifier_api.CONF.default_notification_level,
-                            {self._resource + '_id': id})
+        self.notifier._notify(request.context,
+                              notifier_method,
+                              {self._resource + '_id': id},
+                              cfg.CONF.default_notification_level)
         result = {self._resource: self._view(request.context, obj)}
         self._send_dhcp_notification(request.context,
                                      result,
@@ -456,11 +452,10 @@ class Controller(object):
             msg = _("Invalid format: %s") % request.body
             raise exceptions.BadRequest(resource='body', msg=msg)
         payload['id'] = id
-        notifier_api.notify(request.context,
-                            self._publisher_id,
-                            self._resource + '.update.start',
-                            notifier_api.CONF.default_notification_level,
-                            payload)
+        self.notifier._notify(request.context,
+                              '.'.join([self._resource, 'update.start']),
+                              payload,
+                              cfg.CONF.default_notification_level)
         body = Controller.prepare_request_body(request.context, body, False,
                                                self._resource, self._attr_info,
                                                allow_bulk=self._allow_bulk)
@@ -492,11 +487,10 @@ class Controller(object):
         obj = obj_updater(request.context, id, **kwargs)
         result = {self._resource: self._view(request.context, obj)}
         notifier_method = self._resource + '.update.end'
-        notifier_api.notify(request.context,
-                            self._publisher_id,
-                            notifier_method,
-                            notifier_api.CONF.default_notification_level,
-                            result)
+        self.notifier._notify(request.context,
+                              notifier_method,
+                              result,
+                              cfg.CONF.default_notification_level)
         self._send_dhcp_notification(request.context,
                                      result,
                                      notifier_method)

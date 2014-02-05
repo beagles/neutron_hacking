@@ -14,23 +14,25 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from oslo import messaging
+
 from neutron.common import constants
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.common import utils
 from neutron import manager
 from neutron.openstack.common import log as logging
-from neutron.openstack.common.rpc import proxy
 
 LOG = logging.getLogger(__name__)
 
 
-class MeteringAgentNotifyAPI(proxy.RpcProxy):
+class MeteringAgentNotifyAPI(object):
     """API for plugin to notify L3 metering agent."""
-    BASE_RPC_API_VERSION = '1.0'
 
     def __init__(self, topic=topics.METERING_AGENT):
-        super(MeteringAgentNotifyAPI, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
+        super(MeteringAgentNotifyAPI, self).__init__()
+        target = messaging.Target(topic=topic, version='1.0')
+        self.client = rpc.get_client(target)
 
     def _agent_notification(self, context, method, routers):
         """Notify l3 metering agents hosted by l3 agent hosts."""
@@ -46,7 +48,7 @@ class MeteringAgentNotifyAPI(proxy.RpcProxy):
             for l3_agent in l3_agents:
                 LOG.debug(_('Notify metering agent at %(topic)s.%(host)s '
                             'the message %(method)s'),
-                          {'topic': self.topic,
+                          {'topic': self.client.target.topic,
                            'host': l3_agent.host,
                            'method': method})
 
@@ -55,19 +57,18 @@ class MeteringAgentNotifyAPI(proxy.RpcProxy):
                 l3_routers[l3_agent.host] = l3_router
 
         for host, routers in l3_routers.iteritems():
-            self.cast(context, self.make_msg(method, routers=routers),
-                      topic='%s.%s' % (self.topic, host))
+            topic = '%s.%s' % (self.client.target.topic, host)
+            cctxt = self.client.prepare(topic=topic)
+            cctxt.cast(context, method, routers=routers)
 
     def _notification_fanout(self, context, method, router_id):
         LOG.debug(_('Fanout notify metering agent at %(topic)s the message '
                     '%(method)s on router %(router_id)s'),
-                  {'topic': self.topic,
+                  {'topic': self.client.target.topic,
                    'method': method,
                    'router_id': router_id})
-        self.fanout_cast(
-            context, self.make_msg(method,
-                                   router_id=router_id),
-            topic=self.topic)
+        cctxt = self.client.prepare(fanout=True)
+        cctxt.cast(context, method, router_id=router_id)
 
     def _notification(self, context, method, routers):
         """Notify all the agents that are hosting the routers."""
@@ -76,8 +77,8 @@ class MeteringAgentNotifyAPI(proxy.RpcProxy):
             plugin, constants.L3_AGENT_SCHEDULER_EXT_ALIAS):
             self._agent_notification(context, method, routers)
         else:
-            self.fanout_cast(context, self.make_msg(method, routers=routers),
-                             topic=self.topic)
+            cctxt = self.client.prepare(fanout=True)
+            cctxt.cast(context, method, routers=routers)
 
     def router_deleted(self, context, router_id):
         self._notification_fanout(context, 'router_deleted', router_id)

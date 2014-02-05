@@ -35,10 +35,9 @@ from neutron.extensions import external_net
 from neutron.extensions import l3
 from neutron.manager import NeutronManager
 from neutron.openstack.common import log as logging
-from neutron.openstack.common.notifier import api as notifier_api
-from neutron.openstack.common.notifier import test_notifier
 from neutron.openstack.common import uuidutils
 from neutron.plugins.common import constants as service_constants
+from neutron.tests import fake_notifier
 from neutron.tests.unit import test_api_v2
 from neutron.tests.unit import test_api_v2_extension
 from neutron.tests.unit import test_db_plugin
@@ -269,6 +268,7 @@ class TestL3NatServicePlugin(db_base_plugin_v2.CommonDbMixin,
     supported_extension_aliases = ["router"]
 
     def __init__(self):
+        super(TestL3NatServicePlugin, self).__init__()
         qdbapi.register_models(base=model_base.BASEV2)
 
     def get_plugin_type(self):
@@ -616,7 +616,7 @@ class L3NatTestCaseBase(L3NatTestCaseMixin):
                              'subnet.create.end',
                              'router.interface.create',
                              'router.interface.delete']
-        test_notifier.NOTIFICATIONS = []
+        fake_notifier.reset()
         with self.router() as r:
             with self.subnet() as s:
                 body = self._router_interface_action('add',
@@ -639,9 +639,9 @@ class L3NatTestCaseBase(L3NatTestCaseMixin):
 
                 self.assertEqual(
                     set(exp_notifications),
-                    set(n['event_type'] for n in test_notifier.NOTIFICATIONS))
+                    set(n['event_type'] for n in fake_notifier.NOTIFICATIONS))
 
-                for n in test_notifier.NOTIFICATIONS:
+                for n in fake_notifier.NOTIFICATIONS:
                     if n['event_type'].startswith('router.interface.'):
                         payload = n['payload']['router.interface']
                         self.assertIn('id', payload)
@@ -1723,12 +1723,8 @@ class L3BaseForIntTests(test_db_plugin.NeutronDbPluginV2TestCase):
         super(L3BaseForIntTests, self).setUp(plugin=plugin, ext_mgr=ext_mgr,
                                              service_plugins=service_plugins)
 
-        # Set to None to reload the drivers
-        notifier_api._drivers = None
-        cfg.CONF.set_override("notification_driver", [test_notifier.__name__])
-
     def tearDown(self):
-        test_notifier.NOTIFICATIONS = []
+        fake_notifier.reset()
         super(L3BaseForIntTests, self).tearDown()
 
 
@@ -1750,12 +1746,8 @@ class L3BaseForSepTests(test_db_plugin.NeutronDbPluginV2TestCase):
         super(L3BaseForSepTests, self).setUp(plugin=plugin, ext_mgr=ext_mgr,
                                              service_plugins=service_plugins)
 
-        # Set to None to reload the drivers
-        notifier_api._drivers = None
-        cfg.CONF.set_override("notification_driver", [test_notifier.__name__])
-
     def tearDown(self):
-        test_notifier.NOTIFICATIONS = []
+        fake_notifier.reset()
         super(L3BaseForSepTests, self).tearDown()
 
 
@@ -1766,10 +1758,10 @@ class L3AgentDbIntTestCase(L3BaseForIntTests, L3AgentDbTestCaseBase):
     """
 
     def setUp(self):
+        super(L3AgentDbIntTestCase, self).setUp()
         self.core_plugin = TestL3NatIntPlugin()
         # core plugin is also plugin providing L3 routing
         self.plugin = self.core_plugin
-        super(L3AgentDbIntTestCase, self).setUp()
 
 
 class L3AgentDbSepTestCase(L3BaseForSepTests, L3AgentDbTestCaseBase):
@@ -1779,10 +1771,10 @@ class L3AgentDbSepTestCase(L3BaseForSepTests, L3AgentDbTestCaseBase):
     """
 
     def setUp(self):
+        super(L3AgentDbSepTestCase, self).setUp()
         self.core_plugin = TestNoL3NatPlugin()
         # core plugin is also plugin providing L3 routing
         self.plugin = TestL3NatServicePlugin()
-        super(L3AgentDbSepTestCase, self).setUp()
 
 
 class L3NatDBIntTestCase(L3BaseForIntTests, L3NatTestCaseBase):

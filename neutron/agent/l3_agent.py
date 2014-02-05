@@ -16,6 +16,8 @@
 import eventlet
 import netaddr
 from oslo.config import cfg
+from oslo import messaging
+import sys
 
 from neutron.agent.common import config
 from neutron.agent.linux import external_process
@@ -24,8 +26,10 @@ from neutron.agent.linux import ip_lib
 from neutron.agent.linux import iptables_manager
 from neutron.agent.linux import ovs_lib  # noqa
 from neutron.agent import rpc as agent_rpc
+from neutron.common import config as common_config
 from neutron.common import constants as l3_constants
 from neutron.common import legacy
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.common import utils as common_utils
 from neutron import context
@@ -37,8 +41,6 @@ from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
 from neutron.openstack.common import periodic_task
 from neutron.openstack.common import processutils
-from neutron.openstack.common.rpc import common as rpc_common
-from neutron.openstack.common.rpc import proxy
 from neutron.openstack.common import service
 from neutron import service as neutron_service
 from neutron.services.firewall.agents.l3reference import firewall_l3_agent
@@ -51,7 +53,7 @@ RPC_LOOP_INTERVAL = 1
 FLOATING_IP_CIDR_SUFFIX = '/32'
 
 
-class L3PluginApi(proxy.RpcProxy):
+class L3PluginApi(object):
     """Agent side of the l3 agent RPC API.
 
     API version history:
@@ -60,19 +62,17 @@ class L3PluginApi(proxy.RpcProxy):
 
     """
 
-    BASE_RPC_API_VERSION = '1.0'
-
     def __init__(self, topic, host):
-        super(L3PluginApi, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
+        super(L3PluginApi, self).__init__()
+        target = messaging.Target(topic=topic, version='1.1')
+        self.client = rpc.get_client(target)
         self.host = host
 
     def get_routers(self, context, router_ids=None):
         """Make a remote process call to retrieve the sync data for routers."""
-        return self.call(context,
-                         self.make_msg('sync_routers', host=self.host,
-                                       router_ids=router_ids),
-                         topic=self.topic)
+        return self.client.call(context, 'sync_routers',
+                                host=self.host,
+                                router_ids=router_ids)
 
     def get_external_network_id(self, context):
         """Make a remote process call to retrieve the external network id.
@@ -81,19 +81,16 @@ class L3PluginApi(proxy.RpcProxy):
                                    as exc_type if there are
                                    more than one external network
         """
-        return self.call(context,
-                         self.make_msg('get_external_network_id',
-                                       host=self.host),
-                         topic=self.topic)
+        return self.client.call(context, 'get_external_network_id',
+                                host=self.host)
 
     def update_floatingip_statuses(self, context, router_id, fip_statuses):
         """Call the plugin update floating IPs's operational status."""
-        return self.call(context,
-                         self.make_msg('update_floatingip_statuses',
-                                       router_id=router_id,
-                                       fip_statuses=fip_statuses),
-                         topic=self.topic,
-                         version='1.1')
+        cctxt = self.client.prepare(version='1.1')
+        return cctxt.call(context,
+                          'update_floatingip_statuses',
+                          router_id=router_id,
+                          fip_statuses=fip_statuses)
 
 
 class RouterInfo(object):
@@ -158,7 +155,7 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback, manager.Manager):
             It is now a list of router IDs only.
             Per rpc versioning rules,  it is backwards compatible.
     """
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     OPTS = [
         cfg.StrOpt('external_network_bridge', default='br-ex',
@@ -330,7 +327,7 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback, manager.Manager):
             self.target_ex_net_id = self.plugin_rpc.get_external_network_id(
                 self.context)
             return self.target_ex_net_id
-        except rpc_common.RemoteError as e:
+        except messaging.RemoteError as e:
             with excutils.save_and_reraise_exception():
                 if e.exc_type == 'TooManyExternalNetworks':
                     msg = _(
@@ -823,7 +820,7 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback, manager.Manager):
             self._process_routers(routers, all_routers=True)
             self.fullsync = False
             LOG.debug(_("_sync_routers_task successfully completed"))
-        except rpc_common.RPCException:
+        except messaging.RPCException:
             LOG.exception(_("Failed synchronizing routers due to RPC error"))
             self.fullsync = True
             return
@@ -942,7 +939,7 @@ def main(manager='neutron.agent.l3_agent.L3NATAgentWithStateReport'):
     config.register_root_helper(conf)
     conf.register_opts(interface.OPTS)
     conf.register_opts(external_process.OPTS)
-    conf(project='neutron')
+    common_config.parse(sys.argv[1:])
     config.setup_logging(conf)
     legacy.modernize_quantum_config(conf)
     server = neutron_service.Service.create(

@@ -203,7 +203,7 @@ class EdgeApplianceDriver(object):
         task_name = "update-interface-%s-%d" % (edge_id, index)
         task = tasks.Task(task_name, router_id,
                           self._update_interface, userdata=userdata)
-        task.add_result_monitor(self.callbacks.interface_update_result)
+        task.add_result_monitor(self.callbacks[0].interface_update_result)
         self.task_manager.add(task)
         return task
 
@@ -341,8 +341,8 @@ class EdgeApplianceDriver(object):
                           status_callback=self._status_edge,
                           result_callback=self._result_edge,
                           userdata=userdata)
-        task.add_executed_monitor(self.callbacks.edge_deploy_started)
-        task.add_result_monitor(self.callbacks.edge_deploy_result)
+        task.add_executed_monitor(self.callbacks[0].edge_deploy_started)
+        task.add_result_monitor(self.callbacks[0].edge_deploy_result)
         self.task_manager.add(task)
 
         if wait_for_exec:
@@ -360,7 +360,7 @@ class EdgeApplianceDriver(object):
         }
         task = tasks.Task(task_name, router_id, self._delete_edge,
                           userdata=userdata)
-        task.add_result_monitor(self.callbacks.edge_delete_result)
+        task.add_result_monitor(self.callbacks[0].edge_delete_result)
         self.task_manager.add(task)
         return task
 
@@ -425,7 +425,7 @@ class EdgeApplianceDriver(object):
         task_name = "create-snat-%s-%s-%s" % (edge_id, src, translated)
         task = tasks.Task(task_name, router_id, self._create_nat_rule,
                           userdata=userdata)
-        task.add_result_monitor(self.callbacks.snat_create_result)
+        task.add_result_monitor(self.callbacks[0].snat_create_result)
         self.task_manager.add(task)
         return task
 
@@ -463,7 +463,7 @@ class EdgeApplianceDriver(object):
         task_name = "delete-snat-%s-%s" % (edge_id, src)
         task = tasks.Task(task_name, router_id, self._delete_nat_rule,
                           userdata=userdata)
-        task.add_result_monitor(self.callbacks.snat_delete_result)
+        task.add_result_monitor(self.callbacks[0].snat_delete_result)
         self.task_manager.add(task)
         return task
 
@@ -485,7 +485,7 @@ class EdgeApplianceDriver(object):
         task_name = "create-dnat-%s-%s-%s" % (edge_id, dst, translated)
         task = tasks.Task(task_name, router_id, self._create_nat_rule,
                           userdata=userdata)
-        task.add_result_monitor(self.callbacks.dnat_create_result)
+        task.add_result_monitor(self.callbacks[0].dnat_create_result)
         self.task_manager.add(task)
         return task
 
@@ -502,7 +502,7 @@ class EdgeApplianceDriver(object):
         task_name = "delete-dnat-%s-%s" % (edge_id, translated)
         task = tasks.Task(task_name, router_id, self._delete_nat_rule,
                           userdata=userdata)
-        task.add_result_monitor(self.callbacks.dnat_delete_result)
+        task.add_result_monitor(self.callbacks[0].dnat_delete_result)
         self.task_manager.add(task)
         return task
 
@@ -561,7 +561,7 @@ class EdgeApplianceDriver(object):
         task_name = "update-nat-%s" % edge_id
         task = tasks.Task(task_name, router_id, self._update_nat_rule,
                           userdata=userdata)
-        task.add_result_monitor(self.callbacks.nat_update_result)
+        task.add_result_monitor(self.callbacks[0].nat_update_result)
         self.updated_task['nat'][edge_id] = task
         self.task_manager.add(task)
         return task
@@ -620,7 +620,7 @@ class EdgeApplianceDriver(object):
         task_name = "update-routes-%s" % (edge_id)
         task = tasks.Task(task_name, router_id, self._update_routes,
                           userdata=userdata)
-        task.add_result_monitor(self.callbacks.routes_update_result)
+        task.add_result_monitor(self.callbacks[0].routes_update_result)
         self.updated_task['route'][edge_id] = task
         self.task_manager.add(task)
         return task

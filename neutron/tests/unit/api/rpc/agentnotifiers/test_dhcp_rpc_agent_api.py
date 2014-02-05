@@ -53,24 +53,24 @@ class TestDhcpAgentNotifyAPI(base.BaseTestCase):
             self.notify._notification(mock.Mock(), 'foo', {}, 'net_id')
 
     def test_notification_sends_cast_for_enabled_agent(self):
-        with mock.patch.object(self.notify, 'cast') as mock_cast:
+        with mock.patch.object(self.notify.client, 'prepare') as mock_prepare:
             self._test_notification([mock.Mock()])
-        self.assertEqual(mock_cast.call_count, 1)
+        self.assertEqual(mock_prepare.return_value.cast.call_count, 1)
 
     def test_notification_logs_error_for_no_enabled_agents(self):
-        with mock.patch.object(self.notify, 'cast') as mock_cast:
+        with mock.patch.object(self.notify.client, 'prepare') as mock_prepare:
             with mock.patch.object(dhcp_rpc_agent_api.LOG,
                                    'error') as mock_log:
                 self._test_notification([])
-        self.assertEqual(mock_cast.call_count, 0)
+        self.assertEqual(mock_prepare.return_value.cast.call_count, 0)
         self.assertEqual(mock_log.call_count, 1)
 
     def test_notification_logs_warning_for_inactive_agents(self):
         agent = mock.Mock()
         agent.is_active = False
-        with mock.patch.object(self.notify, 'cast') as mock_cast:
+        with mock.patch.object(self.notify.client, 'prepare') as mock_prepare:
             with mock.patch.object(dhcp_rpc_agent_api.LOG,
                                    'warning') as mock_log:
                 self._test_notification([agent])
-        self.assertEqual(mock_cast.call_count, 1)
+        self.assertEqual(mock_prepare.return_value.cast.call_count, 1)
         self.assertEqual(mock_log.call_count, 1)

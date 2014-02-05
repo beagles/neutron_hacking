@@ -21,6 +21,7 @@ import time
 import eventlet
 import netaddr
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent import l2population_rpc
 from neutron.agent.linux import ip_lib
@@ -29,7 +30,7 @@ from neutron.agent.linux import polling
 from neutron.agent.linux import utils
 from neutron.agent import rpc as agent_rpc
 from neutron.agent import securitygroups_rpc as sg_rpc
-from neutron.common import config as logging_config
+from neutron.common import config as common_config
 from neutron.common import constants as q_const
 from neutron.common import legacy
 from neutron.common import topics
@@ -37,7 +38,7 @@ from neutron.common import utils as q_utils
 from neutron import context
 from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
-from neutron.openstack.common.rpc import dispatcher
+
 from neutron.plugins.common import constants as p_const
 from neutron.plugins.openvswitch.common import config  # noqa
 from neutron.plugins.openvswitch.common import constants
@@ -144,7 +145,7 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
     # history
     #   1.0 Initial version
     #   1.1 Support Security Group RPC
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     def __init__(self, integ_br, tun_br, local_ip,
                  bridge_mappings, root_helper,
@@ -253,8 +254,6 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         # RPC network init
         self.context = context.get_admin_context_without_session()
-        # Handle updates from service
-        self.dispatcher = self.create_rpc_dispatcher()
         # Define the listening consumers for the agent
         consumers = [[topics.PORT, topics.UPDATE],
                      [topics.NETWORK, topics.DELETE],
@@ -263,9 +262,12 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if self.l2_pop:
             consumers.append([topics.L2POPULATION,
                               topics.UPDATE, cfg.CONF.host])
-        self.connection = agent_rpc.create_consumers(self.dispatcher,
-                                                     self.topic,
-                                                     consumers)
+
+        self.callbacks = [self]
+        self.rpc_servers = agent_rpc.create_servers(self.callbacks,
+                                                    self.topic,
+                                                    consumers)
+
         report_interval = cfg.CONF.AGENT.report_interval
         if report_interval:
             heartbeat = loopingcall.FixedIntervalLoopingCall(
@@ -415,14 +417,6 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                 raise NotImplementedError()
 
             getattr(self, method)(context, values)
-
-    def create_rpc_dispatcher(self):
-        '''Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        '''
-        return dispatcher.RpcDispatcher([self])
 
     def provision_local_vlan(self, net_uuid, network_type, physical_network,
                              segmentation_id):
@@ -1316,8 +1310,8 @@ def create_agent_config_map(config):
 def main():
     eventlet.monkey_patch()
     cfg.CONF.register_opts(ip_lib.OPTS)
-    cfg.CONF(project='neutron')
-    logging_config.setup_logging(cfg.CONF)
+    common_config.parse(sys.argv[1:])
+    common_config.setup_logging(cfg.CONF)
     q_utils.log_opt_values(LOG)
     legacy.modernize_quantum_config(cfg.CONF)
 

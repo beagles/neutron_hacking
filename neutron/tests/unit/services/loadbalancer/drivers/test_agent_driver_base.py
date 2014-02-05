@@ -432,27 +432,23 @@ class TestLoadBalancerAgentApi(base.BaseTestCase):
         self.addCleanup(mock.patch.stopall)
 
         self.api = agent_driver_base.LoadBalancerAgentApi('topic')
-        self.mock_cast = mock.patch.object(self.api, 'cast').start()
-        self.mock_msg = mock.patch.object(self.api, 'make_msg').start()
+        self.mock_prepare = mock.patch.object(self.api.client,
+                                              'prepare').start()
 
     def test_init(self):
-        self.assertEqual(self.api.topic, 'topic')
+        self.assertEqual(self.api.client.target.topic, 'topic')
 
     def _call_test_helper(self, method_name, method_args):
         rv = getattr(self.api, method_name)(mock.sentinel.context,
                                             host='host',
                                             **method_args)
-        self.assertEqual(rv, self.mock_cast.return_value)
-        self.mock_cast.assert_called_once_with(
-            mock.sentinel.context,
-            self.mock_msg.return_value,
-            topic='topic.host',
-            version=None
-        )
+        self.assertEqual(rv, self.mock_prepare.return_value.cast.return_value)
 
         if method_name == 'agent_updated':
             method_args = {'payload': method_args}
-        self.mock_msg.assert_called_once_with(
+
+        self.mock_prepare.return_value.cast.assert_called_once_with(
+            mock.sentinel.context,
             method_name,
             **method_args
         )

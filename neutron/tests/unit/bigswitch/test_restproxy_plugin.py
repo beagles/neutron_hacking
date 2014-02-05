@@ -41,8 +41,7 @@ class BigSwitchProxyPluginV2TestCase(test_base.BigSwitchTestBase,
         self.setup_patches()
         if plugin_name:
             self._plugin_name = plugin_name
-        super(BigSwitchProxyPluginV2TestCase,
-              self).setUp(self._plugin_name)
+        super(BigSwitchProxyPluginV2TestCase, self).setUp(self._plugin_name)
         self.port_create_status = 'BUILD'
 
 

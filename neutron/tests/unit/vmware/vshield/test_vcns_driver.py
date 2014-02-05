@@ -324,7 +324,7 @@ class VcnsDriverTestCase(base.BaseTestCase):
         self.addCleanup(self.fc.reset_all)
         self.addCleanup(self.mock_vcns.stop)
 
-        self.vcns_driver = vcns_driver.VcnsDriver(self)
+        self.vcns_driver = vcns_driver.VcnsDriver([self])
 
         self.edge_id = None
         self.result = None

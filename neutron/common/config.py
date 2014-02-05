@@ -20,13 +20,13 @@ Routines for configuring Neutron
 import os
 
 from oslo.config import cfg
+from oslo import messaging
 from paste import deploy
 
 from neutron.api.v2 import attributes
 from neutron.common import utils
 from neutron.openstack.common.db.sqlalchemy import session as db_session
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
 from neutron.version import version_info as neutron_version
 
 
@@ -81,6 +81,9 @@ core_opts = [
                help=_("The hostname Neutron is running on")),
     cfg.BoolOpt('force_gateway_on_subnet', default=False,
                 help=_("Ensure that configured gateway is on subnet")),
+    cfg.StrOpt('default_notification_level',
+               default='INFO',
+               help='Default notification level for outgoing notifications'),
 ]
 
 core_cli_opts = [
@@ -95,7 +98,7 @@ cfg.CONF.register_opts(core_opts)
 cfg.CONF.register_cli_opts(core_cli_opts)
 
 # Ensure that the control exchange is set correctly
-rpc.set_defaults(control_exchange='neutron')
+messaging.set_transport_defaults(control_exchange='neutron')
 _SQL_CONNECTION_DEFAULT = 'sqlite://'
 # Update the default QueuePool parameters. These can be tweaked by the
 # configuration variables - max_pool_size, max_overflow and pool_timeout
@@ -107,6 +110,10 @@ db_session.set_defaults(sql_connection=_SQL_CONNECTION_DEFAULT,
 def parse(args):
     cfg.CONF(args=args, project='neutron',
              version='%%prog %s' % neutron_version.release_string())
+
+    # TODO(ihrachys): local import, otherwise import failure due to loop
+    from neutron.common import rpc
+    rpc.init(cfg.CONF)
 
     # Validate that the base_mac is of the correct format
     msg = attributes._validate_regex(cfg.CONF.base_mac,

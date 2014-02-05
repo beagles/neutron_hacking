@@ -13,20 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from oslo import messaging
+
 from neutron.common import constants
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.common import utils
 from neutron import manager
 from neutron.openstack.common import log as logging
-from neutron.openstack.common.rpc import proxy
 
 
 LOG = logging.getLogger(__name__)
 
 
-class DhcpAgentNotifyAPI(proxy.RpcProxy):
+class DhcpAgentNotifyAPI(object):
     """API for plugin to notify DHCP agent."""
-    BASE_RPC_API_VERSION = '1.0'
+
     # It seems dhcp agent does not support bulk operation
     VALID_RESOURCES = ['network', 'subnet', 'port']
     VALID_METHOD_NAMES = ['network.create.end',
@@ -40,8 +42,16 @@ class DhcpAgentNotifyAPI(proxy.RpcProxy):
                           'port.delete.end']
 
     def __init__(self, topic=topics.DHCP_AGENT):
-        super(DhcpAgentNotifyAPI, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
+        super(DhcpAgentNotifyAPI, self).__init__()
+        self.target = messaging.Target(topic=topic, version='1.0')
+
+    def __getattr__(self, name):
+        # FIXME(ihrachys):
+        # postpone client initialization till real demand (used in UTs)
+        if name == 'client':
+            self.client = rpc.get_client(self.target)
+            return self.client
+        super(DhcpAgentNotifyAPI, self).__init__()
 
     def _get_enabled_dhcp_agents(self, context, network_id):
         """Return enabled dhcp agents associated with the given network."""
@@ -51,10 +61,8 @@ class DhcpAgentNotifyAPI(proxy.RpcProxy):
 
     def _notification_host(self, context, method, payload, host):
         """Notify the agent on host."""
-        self.cast(
-            context, self.make_msg(method,
-                                   payload=payload),
-            topic='%s.%s' % (topics.DHCP_AGENT, host))
+        cctxt = self.client.prepare(server=host)
+        cctxt.cast(context, method, payload=payload)
 
     def _notification(self, context, method, payload, network_id):
         """Notify all the agents that are hosting the network."""
@@ -98,10 +106,9 @@ class DhcpAgentNotifyAPI(proxy.RpcProxy):
                                 'net_id': network_id,
                             })
             for agent in agents:
-                self.cast(
-                    context, self.make_msg(method,
-                                           payload=payload),
-                    topic='%s.%s' % (agent.topic, agent.host))
+                topic = '%s.%s' % (agent.topic, agent.host)
+                cctxt = self.client.prepare(topic=topic)
+                cctxt.cast(context, method, payload=payload)
         else:
             # besides the non-agentscheduler plugin,
             # There is no way to query who is hosting the network
@@ -110,10 +117,9 @@ class DhcpAgentNotifyAPI(proxy.RpcProxy):
 
     def _notification_fanout(self, context, method, payload):
         """Fanout the payload to all dhcp agents."""
-        self.fanout_cast(
-            context, self.make_msg(method,
-                                   payload=payload),
-            topic=topics.DHCP_AGENT)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=topics.DHCP_AGENT)
+        cctxt.cast(context, method, payload=payload)
 
     def network_removed_from_agent(self, context, network_id, host):
         self._notification_host(context, 'network_delete_end',

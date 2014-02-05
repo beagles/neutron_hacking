@@ -28,8 +28,7 @@ class TestApiCache(base.BaseTestCase):
         self.addCleanup(mock.patch.stopall)
 
         self.api = api.LbaasAgentApi('topic', mock.sentinel.context, 'host')
-        self.make_msg = mock.patch.object(self.api, 'make_msg').start()
-        self.mock_call = mock.patch.object(self.api, 'call').start()
+        self.mock_call = mock.patch.object(self.api.client, 'call').start()
 
     def test_init(self):
         self.assertEqual(self.api.host, 'host')
@@ -41,11 +40,10 @@ class TestApiCache(base.BaseTestCase):
             self.mock_call.return_value
         )
 
-        self.make_msg.assert_called_once_with('get_ready_devices', host='host')
         self.mock_call.assert_called_once_with(
             mock.sentinel.context,
-            self.make_msg.return_value,
-            topic='topic'
+            'get_ready_devices',
+            host='host'
         )
 
     def test_get_logical_device(self):
@@ -54,14 +52,10 @@ class TestApiCache(base.BaseTestCase):
             self.mock_call.return_value
         )
 
-        self.make_msg.assert_called_once_with(
-            'get_logical_device',
-            pool_id='pool_id')
-
         self.mock_call.assert_called_once_with(
             mock.sentinel.context,
-            self.make_msg.return_value,
-            topic='topic'
+            'get_logical_device',
+            pool_id='pool_id'
         )
 
     def test_pool_destroyed(self):
@@ -70,14 +64,10 @@ class TestApiCache(base.BaseTestCase):
             self.mock_call.return_value
         )
 
-        self.make_msg.assert_called_once_with(
-            'pool_destroyed',
-            pool_id='pool_id')
-
         self.mock_call.assert_called_once_with(
             mock.sentinel.context,
-            self.make_msg.return_value,
-            topic='topic'
+            'pool_destroyed',
+            pool_id='pool_id'
         )
 
     def test_pool_deployed(self):
@@ -86,14 +76,10 @@ class TestApiCache(base.BaseTestCase):
             self.mock_call.return_value
         )
 
-        self.make_msg.assert_called_once_with(
-            'pool_deployed',
-            pool_id='pool_id')
-
         self.mock_call.assert_called_once_with(
             mock.sentinel.context,
-            self.make_msg.return_value,
-            topic='topic'
+            'pool_deployed',
+            pool_id='pool_id'
         )
 
     def test_update_status(self):
@@ -102,16 +88,12 @@ class TestApiCache(base.BaseTestCase):
             self.mock_call.return_value
         )
 
-        self.make_msg.assert_called_once_with(
+        self.mock_call.assert_called_once_with(
+            mock.sentinel.context,
             'update_status',
             obj_type='pool',
             obj_id='pool_id',
-            status='ACTIVE')
-
-        self.mock_call.assert_called_once_with(
-            mock.sentinel.context,
-            self.make_msg.return_value,
-            topic='topic'
+            status='ACTIVE'
         )
 
     def test_plug_vip_port(self):
@@ -120,15 +102,11 @@ class TestApiCache(base.BaseTestCase):
             self.mock_call.return_value
         )
 
-        self.make_msg.assert_called_once_with(
-            'plug_vip_port',
-            port_id='port_id',
-            host='host')
-
         self.mock_call.assert_called_once_with(
             mock.sentinel.context,
-            self.make_msg.return_value,
-            topic='topic'
+            'plug_vip_port',
+            port_id='port_id',
+            host='host'
         )
 
     def test_unplug_vip_port(self):
@@ -137,15 +115,11 @@ class TestApiCache(base.BaseTestCase):
             self.mock_call.return_value
         )
 
-        self.make_msg.assert_called_once_with(
-            'unplug_vip_port',
-            port_id='port_id',
-            host='host')
-
         self.mock_call.assert_called_once_with(
             mock.sentinel.context,
-            self.make_msg.return_value,
-            topic='topic'
+            'unplug_vip_port',
+            port_id='port_id',
+            host='host'
         )
 
     def test_update_pool_stats(self):
@@ -154,14 +128,10 @@ class TestApiCache(base.BaseTestCase):
             self.mock_call.return_value
         )
 
-        self.make_msg.assert_called_once_with(
+        self.mock_call.assert_called_once_with(
+            mock.sentinel.context,
             'update_pool_stats',
             pool_id='pool_id',
             stats={'stat': 'stat'},
-            host='host')
-
-        self.mock_call.assert_called_once_with(
-            mock.sentinel.context,
-            self.make_msg.return_value,
-            topic='topic'
+            host='host'
         )

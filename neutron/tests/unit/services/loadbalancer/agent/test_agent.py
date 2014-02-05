@@ -30,13 +30,16 @@ class TestLbaasService(base.BaseTestCase):
         self.addCleanup(cfg.CONF.reset)
 
     def test_start(self):
-        with mock.patch.object(
-            agent.rpc_service.Service, 'start'
-        ) as mock_start:
+        with contextlib.nested(mock.patch.object(agent.service.Service,
+                                                 'start'),
+                               mock.patch.object(agent.manager,
+                                                 'LbaasAgentManager')) \
+            as (mock_start, mock_manager):
 
-            mgr = mock.Mock()
+            mgr = ('neutron.services.loadbalancer.'
+                   'agent.agent_manager.LbaasAgentManager')
             cfg.CONF.periodic_interval = mock.Mock(return_value=10)
-            agent_service = agent.LbaasAgentService('host', 'topic', mgr)
+            agent_service = agent.LbaasAgentService('host', None, 'topic', mgr)
             agent_service.start()
 
             self.assertTrue(mock_start.called)
@@ -45,7 +48,7 @@ class TestLbaasService(base.BaseTestCase):
         logging_str = 'neutron.agent.common.config.setup_logging'
         with contextlib.nested(
             mock.patch(logging_str),
-            mock.patch.object(agent.service, 'launch'),
+            mock.patch.object(agent.common_service, 'launch'),
             mock.patch.object(agent, 'eventlet'),
             mock.patch('sys.argv'),
             mock.patch.object(agent.manager, 'LbaasAgentManager'),

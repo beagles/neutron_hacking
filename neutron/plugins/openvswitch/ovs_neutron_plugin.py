@@ -16,6 +16,7 @@
 import sys
 
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
@@ -23,7 +24,7 @@ from neutron.api.rpc.agentnotifiers import l3_rpc_agent_api
 from neutron.api.v2 import attributes
 from neutron.common import constants as q_const
 from neutron.common import exceptions as n_exc
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.common import utils
 from neutron.db import agents_db
@@ -47,8 +48,8 @@ from neutron.extensions import providernet as provider
 from neutron import manager
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
-from neutron.openstack.common.rpc import proxy
+
+
 from neutron.plugins.common import constants as svc_constants
 from neutron.plugins.common import utils as plugin_utils
 from neutron.plugins.openvswitch.common import config  # noqa
@@ -67,20 +68,11 @@ class OVSRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
     #   1.0 Initial version
     #   1.1 Support Security Group RPC
 
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     def __init__(self, notifier, tunnel_type):
         self.notifier = notifier
         self.tunnel_type = tunnel_type
-
-    def create_rpc_dispatcher(self):
-        '''Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        '''
-        return q_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
 
     @classmethod
     def get_port_from_device(cls, device):
@@ -182,8 +174,7 @@ class OVSRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
         return entry
 
 
-class AgentNotifierApi(proxy.RpcProxy,
-                       sg_rpc.SecurityGroupAgentRpcApiMixin):
+class AgentNotifierApi(sg_rpc.SecurityGroupAgentRpcApiMixin):
     '''Agent side of the openvswitch rpc API.
 
     API version history:
@@ -191,11 +182,11 @@ class AgentNotifierApi(proxy.RpcProxy,
 
     '''
 
-    BASE_RPC_API_VERSION = '1.0'
-
     def __init__(self, topic):
-        super(AgentNotifierApi, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
+        super(AgentNotifierApi, self).__init__()
+        target = messaging.Target(topic=topic, version='1.0')
+        self.client = rpc.get_client(target)
+
         self.topic_network_delete = topics.get_topic_name(topic,
                                                           topics.NETWORK,
                                                           topics.DELETE)
@@ -207,28 +198,27 @@ class AgentNotifierApi(proxy.RpcProxy,
                                                          topics.UPDATE)
 
     def network_delete(self, context, network_id):
-        self.fanout_cast(context,
-                         self.make_msg('network_delete',
-                                       network_id=network_id),
-                         topic=self.topic_network_delete)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_network_delete)
+        cctxt.cast(context, 'network_delete', network_id=network_id)
 
     def port_update(self, context, port, network_type, segmentation_id,
                     physical_network):
-        self.fanout_cast(context,
-                         self.make_msg('port_update',
-                                       port=port,
-                                       network_type=network_type,
-                                       segmentation_id=segmentation_id,
-                                       physical_network=physical_network),
-                         topic=self.topic_port_update)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_port_update)
+        cctxt.cast(context, 'port_update',
+                   port=port,
+                   network_type=network_type,
+                   segmentation_id=segmentation_id,
+                   physical_network=physical_network)
 
     def tunnel_update(self, context, tunnel_ip, tunnel_id, tunnel_type):
-        self.fanout_cast(context,
-                         self.make_msg('tunnel_update',
-                                       tunnel_ip=tunnel_ip,
-                                       tunnel_id=tunnel_id,
-                                       tunnel_type=tunnel_type),
-                         topic=self.topic_tunnel_update)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_tunnel_update)
+        cctxt.cast(context, 'tunnel_update',
+                   tunnel_ip=tunnel_ip,
+                   tunnel_id=tunnel_id,
+                   tunnel_type=tunnel_type)
 
 
 class OVSNeutronPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
@@ -333,20 +323,22 @@ class OVSNeutronPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
         # RPC support
         self.service_topics = {svc_constants.CORE: topics.PLUGIN,
                                svc_constants.L3_ROUTER_NAT: topics.L3PLUGIN}
-        self.conn = rpc.create_connection(new=True)
         self.notifier = AgentNotifierApi(topics.AGENT)
         self.agent_notifiers[q_const.AGENT_TYPE_DHCP] = (
             dhcp_rpc_agent_api.DhcpAgentNotifyAPI()
         )
         self.agent_notifiers[q_const.AGENT_TYPE_L3] = (
-            l3_rpc_agent_api.L3AgentNotify
+            l3_rpc_agent_api.L3AgentNotifyAPI()
         )
-        self.callbacks = OVSRpcCallbacks(self.notifier, self.tunnel_type)
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
+        self.callbacks = [OVSRpcCallbacks(self.notifier, self.tunnel_type),
+                          agents_db.AgentExtRpcCallback()]
+
+        self.rpc_servers = []
         for svc_topic in self.service_topics.values():
-            self.conn.create_consumer(svc_topic, self.dispatcher, fanout=False)
-        # Consume from all consumers in a thread
-        self.conn.consume_in_thread()
+            target = messaging.Target(topic=svc_topic, server=cfg.CONF.host)
+            rpc_server = rpc.get_server(target, self.callbacks)
+            rpc_server.start()
+            self.rpc_servers.append(rpc_server)
 
     def _parse_network_vlan_ranges(self):
         try:

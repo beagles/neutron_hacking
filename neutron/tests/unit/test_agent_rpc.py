@@ -15,7 +15,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from contextlib import nested
 import mock
+from oslo.config import cfg
 
 from neutron.agent import rpc
 from neutron.openstack.common import context
@@ -27,7 +29,7 @@ class AgentRPCPluginApi(base.BaseTestCase):
         agent = rpc.PluginApi('fake_topic')
         ctxt = context.RequestContext('fake_user', 'fake_project')
         expect_val = 'foo'
-        with mock.patch('neutron.openstack.common.rpc.call') as rpc_call:
+        with mock.patch('oslo.messaging.RPCClient.call') as rpc_call:
             rpc_call.return_value = expect_val
             func_obj = getattr(agent, method)
             if method == 'tunnel_sync':
@@ -47,67 +49,76 @@ class AgentRPCPluginApi(base.BaseTestCase):
 
 
 class AgentPluginReportState(base.BaseTestCase):
+
+    strtime = 'neutron.openstack.common.timeutils.strtime'
+
     def test_plugin_report_state_use_call(self):
         topic = 'test'
         reportStateAPI = rpc.PluginReportStateAPI(topic)
         expected_agent_state = {'agent': 'test'}
-        with mock.patch.object(reportStateAPI, 'call') as call:
+        with nested(mock.patch.object(reportStateAPI.client, 'call'),
+                    mock.patch(self.strtime)) as (call, time):
+            time.return_value = 'TESTTIME'
             ctxt = context.RequestContext('fake_user', 'fake_project')
             reportStateAPI.report_state(ctxt, expected_agent_state,
                                         use_call=True)
-            self.assertEqual(call.call_args[0][0], ctxt)
-            self.assertEqual(call.call_args[0][1]['method'],
-                             'report_state')
-            self.assertEqual(call.call_args[0][1]['args']['agent_state'],
-                             {'agent_state': expected_agent_state})
-            self.assertIsInstance(call.call_args[0][1]['args']['time'],
-                                  str)
-            self.assertEqual(call.call_args[1]['topic'], topic)
+            expected_args = mock.call(
+                ctxt, 'report_state',
+                agent_state={'agent_state': expected_agent_state},
+                time='TESTTIME')
+            self.assertEqual(call.call_args, expected_args)
 
     def test_plugin_report_state_cast(self):
         topic = 'test'
         reportStateAPI = rpc.PluginReportStateAPI(topic)
         expected_agent_state = {'agent': 'test'}
-        with mock.patch.object(reportStateAPI, 'cast') as cast:
+        with nested(mock.patch.object(reportStateAPI.client, 'cast'),
+                    mock.patch(self.strtime)) as (cast, time):
+            time.return_value = 'TESTTIME'
             ctxt = context.RequestContext('fake_user', 'fake_project')
             reportStateAPI.report_state(ctxt, expected_agent_state)
-            self.assertEqual(cast.call_args[0][0], ctxt)
-            self.assertEqual(cast.call_args[0][1]['method'],
-                             'report_state')
-            self.assertEqual(cast.call_args[0][1]['args']['agent_state'],
-                             {'agent_state': expected_agent_state})
-            self.assertIsInstance(cast.call_args[0][1]['args']['time'],
-                                  str)
-            self.assertEqual(cast.call_args[1]['topic'], topic)
+            expected_args = mock.call(
+                ctxt, 'report_state',
+                agent_state={'agent_state': expected_agent_state},
+                time='TESTTIME')
+            self.assertEqual(cast.call_args, expected_args)
 
 
 class AgentRPCMethods(base.BaseTestCase):
     def test_create_consumers(self):
-        dispatcher = mock.Mock()
-        expected = [
-            mock.call(new=True),
-            mock.call().create_consumer('foo-topic-op', dispatcher,
-                                        fanout=True),
-            mock.call().consume_in_thread()
+        endpoint = mock.Mock()
+
+        expected_get_server = [
+            mock.call(mock.ANY, endpoints=[endpoint]),
+            mock.call().start(),
+        ]
+        expected_target = [
+            mock.call(topic='foo-topic-op', server=cfg.CONF.host),
         ]
 
-        call_to_patch = 'neutron.openstack.common.rpc.create_connection'
-        with mock.patch(call_to_patch) as create_connection:
-            rpc.create_consumers(dispatcher, 'foo', [('topic', 'op')])
-            create_connection.assert_has_calls(expected)
+        get_server_call = 'neutron.common.rpc.get_server'
+        target_call = 'oslo.messaging.Target'
+        with nested(mock.patch(get_server_call),
+                    mock.patch(target_call)) as (get_server, target):
+            rpc.create_servers([endpoint], 'foo', [('topic', 'op')])
+            target.assert_has_calls(expected_target)
+            get_server.assert_has_calls(expected_get_server)
 
     def test_create_consumers_with_node_name(self):
-        dispatcher = mock.Mock()
-        expected = [
-            mock.call(new=True),
-            mock.call().create_consumer('foo-topic-op', dispatcher,
-                                        fanout=True),
-            mock.call().create_consumer('foo-topic-op.node1', dispatcher,
-                                        fanout=False),
-            mock.call().consume_in_thread()
+        endpoint = mock.Mock()
+
+        expected_get_server = [
+            mock.call(mock.ANY, endpoints=[endpoint]),
+            mock.call().start(),
+        ]
+        expected_target = [
+            mock.call(topic='foo-topic-op', server='node1'),
         ]
 
-        call_to_patch = 'neutron.openstack.common.rpc.create_connection'
-        with mock.patch(call_to_patch) as create_connection:
-            rpc.create_consumers(dispatcher, 'foo', [('topic', 'op', 'node1')])
-            create_connection.assert_has_calls(expected)
+        get_server_call = 'neutron.common.rpc.get_server'
+        target_call = 'oslo.messaging.Target'
+        with nested(mock.patch(get_server_call),
+                    mock.patch(target_call)) as (get_server, target):
+            rpc.create_servers([endpoint], 'foo', [('topic', 'op', 'node1')])
+            target.assert_has_calls(expected_target)
+            get_server.assert_has_calls(expected_get_server)

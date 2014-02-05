@@ -46,7 +46,7 @@ class TestOVSNeutronOFPRyuAgent(RyuAgentTestCase):
         self.q_ctx = mock.patch(
             self._AGENT_NAME + '.q_context').start()
         self.agent_rpc = mock.patch(
-            self._AGENT_NAME + '.agent_rpc.create_consumers').start()
+            self._AGENT_NAME + '.agent_rpc.create_servers').start()
         self.sg_rpc = mock.patch(
             self._AGENT_NAME + '.sg_rpc').start()
         self.sg_agent = mock.patch(
@@ -227,21 +227,14 @@ class TestOVSNeutronOFPRyuAgent(RyuAgentTestCase):
 
 class TestRyuPluginApi(RyuAgentTestCase):
     def test_get_ofp_rest_api_addr(self):
-        with nested(
-            mock.patch(self._AGENT_NAME + '.RyuPluginApi.make_msg',
-                       return_value='msg'),
-            mock.patch(self._AGENT_NAME + '.RyuPluginApi.call',
-                       return_value='10.0.0.1')
-        ) as (mock_msg, mock_call):
+        with mock.patch('oslo.messaging.RPCClient.call',
+                        return_value='10.0.0.1') as mock_call:
             api = self.mod_agent.RyuPluginApi('topics')
             addr = api.get_ofp_rest_api_addr('context')
 
         self.assertEqual(addr, '10.0.0.1')
-        mock_msg.assert_has_calls([
-            mock.call('get_ofp_rest_api')
-        ])
         mock_call.assert_has_calls([
-            mock.call('context', 'msg', topic='topics')
+            mock.call('context', 'get_ofp_rest_api')
         ])
 
 

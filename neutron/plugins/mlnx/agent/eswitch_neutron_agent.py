@@ -22,6 +22,7 @@ import time
 
 import eventlet
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent import rpc as agent_rpc
 from neutron.agent import securitygroups_rpc as sg_rpc
@@ -32,8 +33,8 @@ from neutron.common import utils as q_utils
 from neutron import context
 from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
-from neutron.openstack.common.rpc import common as rpc_common
-from neutron.openstack.common.rpc import dispatcher
+
+
 from neutron.plugins.common import constants as p_const
 from neutron.plugins.mlnx.agent import utils
 from neutron.plugins.mlnx.common import config  # noqa
@@ -149,7 +150,7 @@ class MlnxEswitchRpcCallbacks(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     # Set RPC API version to 1.0 by default.
     # history
     #   1.1 Support Security Group RPC
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     def __init__(self, context, agent):
         self.context = context
@@ -202,19 +203,10 @@ class MlnxEswitchRpcCallbacks(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                         port['mac_address'],
                         self.agent.agent_id,
                         cfg.CONF.host)
-            except rpc_common.Timeout:
+            except messaging.MessagingTimeout:
                 LOG.error(_("RPC timeout while updating port %s"), port['id'])
         else:
             LOG.debug(_("No port %s defined on agent."), port['id'])
-
-    def create_rpc_dispatcher(self):
-        """Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an rpc API version,
-        or support more than one class as the target of rpc messages,
-        override this method.
-        """
-        return dispatcher.RpcDispatcher([self])
 
 
 class MlnxEswitchPluginApi(agent_rpc.PluginApi,
@@ -223,8 +215,8 @@ class MlnxEswitchPluginApi(agent_rpc.PluginApi,
 
 
 class MlnxEswitchNeutronAgent(sg_rpc.SecurityGroupAgentRpcMixin):
-    # Set RPC API version to 1.0 by default.
-    #RPC_API_VERSION = '1.0'
+    # Set target version to 1.0 by default.
+    #target = messaging.Target(version='1.0')
 
     def __init__(self, interface_mapping):
         self._polling_interval = cfg.CONF.AGENT.polling_interval
@@ -265,16 +257,14 @@ class MlnxEswitchNeutronAgent(sg_rpc.SecurityGroupAgentRpcMixin):
         # RPC network init
         self.context = context.get_admin_context_without_session()
         # Handle updates from service
-        self.callbacks = MlnxEswitchRpcCallbacks(self.context,
-                                                 self)
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
+        self.callbacks = [MlnxEswitchRpcCallbacks(self.context, self)]
         # Define the listening consumers for the agent
         consumers = [[topics.PORT, topics.UPDATE],
                      [topics.NETWORK, topics.DELETE],
                      [topics.SECURITY_GROUP, topics.UPDATE]]
-        self.connection = agent_rpc.create_consumers(self.dispatcher,
-                                                     self.topic,
-                                                     consumers)
+        self.rpc_servers = agent_rpc.create_servers(self.callbacks,
+                                                    self.topic,
+                                                    consumers)
 
         report_interval = cfg.CONF.AGENT.report_interval
         if report_interval:

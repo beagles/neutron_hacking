@@ -16,10 +16,12 @@
 #    under the License.
 
 import os
+import sys
 
 import eventlet
 import netaddr
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent.common import config
 from neutron.agent.linux import dhcp
@@ -27,9 +29,11 @@ from neutron.agent.linux import external_process
 from neutron.agent.linux import interface
 from neutron.agent.linux import ovs_lib  # noqa
 from neutron.agent import rpc as agent_rpc
+from neutron.common import config as common_config
 from neutron.common import constants
 from neutron.common import exceptions
 from neutron.common import legacy
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.common import utils
 from neutron import context
@@ -37,8 +41,6 @@ from neutron import manager
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
-from neutron.openstack.common.rpc import common
-from neutron.openstack.common.rpc import proxy
 from neutron.openstack.common import service
 from neutron import service as neutron_service
 
@@ -135,7 +137,7 @@ class DhcpAgent(manager.Manager):
                         % {'net_id': network.id, 'action': action})
         except Exception as e:
             self.needs_resync = True
-            if (isinstance(e, common.RemoteError)
+            if (isinstance(e, messaging.RemoteError)
                 and e.exc_type == 'NetworkNotFound'
                 or isinstance(e, exceptions.NetworkNotFound)):
                 LOG.warning(_("Network %s has been deleted."), network.id)
@@ -365,7 +367,7 @@ class DhcpAgent(manager.Manager):
         pm.disable()
 
 
-class DhcpPluginApi(proxy.RpcProxy):
+class DhcpPluginApi(object):
     """Agent side of the dhcp rpc API.
 
     API version history:
@@ -375,83 +377,68 @@ class DhcpPluginApi(proxy.RpcProxy):
 
     """
 
-    BASE_RPC_API_VERSION = '1.1'
-
     def __init__(self, topic, context, use_namespaces):
-        super(DhcpPluginApi, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
+        super(DhcpPluginApi, self).__init__()
+        target = messaging.Target(topic=topic, version='1.1')
+        self.client = rpc.get_client(target)
         self.context = context
         self.host = cfg.CONF.host
         self.use_namespaces = use_namespaces
 
     def get_active_networks_info(self):
         """Make a remote process call to retrieve all network info."""
-        networks = self.call(self.context,
-                             self.make_msg('get_active_networks_info',
-                                           host=self.host),
-                             topic=self.topic)
+        networks = self.client.call(self.context, 'get_active_networks_info',
+                                    host=self.host)
         return [dhcp.NetModel(self.use_namespaces, n) for n in networks]
 
     def get_network_info(self, network_id):
         """Make a remote process call to retrieve network info."""
-        network = self.call(self.context,
-                            self.make_msg('get_network_info',
-                                          network_id=network_id,
-                                          host=self.host),
-                            topic=self.topic)
+        network = self.client.call(self.context, 'get_network_info',
+                                   network_id=network_id,
+                                   host=self.host)
         if network:
             return dhcp.NetModel(self.use_namespaces, network)
 
     def get_dhcp_port(self, network_id, device_id):
         """Make a remote process call to get the dhcp port."""
-        port = self.call(self.context,
-                         self.make_msg('get_dhcp_port',
-                                       network_id=network_id,
-                                       device_id=device_id,
-                                       host=self.host),
-                         topic=self.topic)
+        port = self.client.call(self.context, 'get_dhcp_port',
+                                network_id=network_id,
+                                device_id=device_id,
+                                host=self.host)
         if port:
             return dhcp.DictModel(port)
 
     def create_dhcp_port(self, port):
         """Make a remote process call to create the dhcp port."""
-        port = self.call(self.context,
-                         self.make_msg('create_dhcp_port',
-                                       port=port,
-                                       host=self.host),
-                         topic=self.topic)
+        port = self.client.call(self.context, 'create_dhcp_port',
+                                port=port,
+                                host=self.host)
         if port:
             return dhcp.DictModel(port)
 
     def update_dhcp_port(self, port_id, port):
         """Make a remote process call to update the dhcp port."""
-        port = self.call(self.context,
-                         self.make_msg('update_dhcp_port',
-                                       port_id=port_id,
-                                       port=port,
-                                       host=self.host),
-                         topic=self.topic)
+        port = self.client.call(self.context, 'update_dhcp_port',
+                                port_id=port_id,
+                                port=port,
+                                host=self.host)
         if port:
             return dhcp.DictModel(port)
 
     def release_dhcp_port(self, network_id, device_id):
         """Make a remote process call to release the dhcp port."""
-        return self.call(self.context,
-                         self.make_msg('release_dhcp_port',
-                                       network_id=network_id,
-                                       device_id=device_id,
-                                       host=self.host),
-                         topic=self.topic)
+        return self.client.call(self.context, 'release_dhcp_port',
+                                network_id=network_id,
+                                device_id=device_id,
+                                host=self.host)
 
     def release_port_fixed_ip(self, network_id, device_id, subnet_id):
         """Make a remote process call to release a fixed_ip on the port."""
-        return self.call(self.context,
-                         self.make_msg('release_port_fixed_ip',
-                                       network_id=network_id,
-                                       subnet_id=subnet_id,
-                                       device_id=device_id,
-                                       host=self.host),
-                         topic=self.topic)
+        return self.client.call(self.context, 'release_port_fixed_ip',
+                                network_id=network_id,
+                                subnet_id=subnet_id,
+                                device_id=device_id,
+                                host=self.host)
 
 
 class NetworkCache(object):
@@ -598,7 +585,7 @@ def register_options():
 def main():
     eventlet.monkey_patch()
     register_options()
-    cfg.CONF(project='neutron')
+    common_config.parse(sys.argv[1:])
     config.setup_logging(cfg.CONF)
     legacy.modernize_quantum_config(cfg.CONF)
     server = neutron_service.Service.create(

@@ -18,17 +18,18 @@
 # @author: Sumit Naiksatam, sumitnaiksatam@gmail.com, Big Switch Networks, Inc.
 
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.common import exceptions as n_exception
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron import context as neutron_context
 from neutron.db import api as qdbapi
 from neutron.db.firewall import firewall_db
 from neutron.extensions import firewall as fw_ext
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
-from neutron.openstack.common.rpc import proxy
+
+
 from neutron.plugins.common import constants as const
 
 
@@ -36,13 +37,10 @@ LOG = logging.getLogger(__name__)
 
 
 class FirewallCallbacks(object):
-    RPC_API_VERSION = '1.0'
+    target = messaging.Target(version='1.0')
 
     def __init__(self, plugin):
         self.plugin = plugin
-
-    def create_rpc_dispatcher(self):
-        return q_rpc.PluginRpcDispatcher([self])
 
     def set_firewall_status(self, context, firewall_id, status, **kwargs):
         """Agent uses this to set a firewall's status."""
@@ -96,38 +94,29 @@ class FirewallCallbacks(object):
         return fw_tenant_list
 
 
-class FirewallAgentApi(proxy.RpcProxy):
+class FirewallAgentApi(object):
     """Plugin side of plugin to agent RPC API."""
 
-    API_VERSION = '1.0'
-
     def __init__(self, topic, host):
-        super(FirewallAgentApi, self).__init__(topic, self.API_VERSION)
+        super(FirewallAgentApi, self).__init__()
+        target = messaging.Target(topic=topic, version='1.0')
+        self.client = rpc.get_client(target)
         self.host = host
 
     def create_firewall(self, context, firewall):
-        return self.fanout_cast(
-            context,
-            self.make_msg('create_firewall', firewall=firewall,
-                          host=self.host),
-            topic=self.topic
-        )
+        cctxt = self.client.prepare(fanout=True)
+        return cctxt.cast(context, 'create_firewall',
+                          firewall=firewall, host=self.host)
 
     def update_firewall(self, context, firewall):
-        return self.fanout_cast(
-            context,
-            self.make_msg('update_firewall', firewall=firewall,
-                          host=self.host),
-            topic=self.topic
-        )
+        cctxt = self.client.prepare(fanout=True)
+        return cctxt.cast(context, 'update_firewall',
+                          firewall=firewall, host=self.host)
 
     def delete_firewall(self, context, firewall):
-        return self.fanout_cast(
-            context,
-            self.make_msg('delete_firewall', firewall=firewall,
-                          host=self.host),
-            topic=self.topic
-        )
+        cctxt = self.client.prepare(fanout=True)
+        return cctxt.cast(context, 'delete_firewall',
+                          firewall=firewall, host=self.host)
 
 
 class FirewallCountExceeded(n_exception.NeutronException):
@@ -155,14 +144,12 @@ class FirewallPlugin(firewall_db.Firewall_db_mixin):
         """Do the initialization for the firewall service plugin here."""
         qdbapi.register_models()
 
-        self.callbacks = FirewallCallbacks(self)
+        self.callbacks = [FirewallCallbacks(self)]
 
-        self.conn = rpc.create_connection(new=True)
-        self.conn.create_consumer(
-            topics.FIREWALL_PLUGIN,
-            self.callbacks.create_rpc_dispatcher(),
-            fanout=False)
-        self.conn.consume_in_thread()
+        target = messaging.Target(topic=topics.FIREWALL_PLUGIN,
+                                  server=cfg.CONF.host)
+        self.rpc_server = rpc.get_server(target, self.callbacks)
+        self.rpc_server.start()
 
         self.agent_rpc = FirewallAgentApi(
             topics.L3_AGENT,

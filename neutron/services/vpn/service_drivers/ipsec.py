@@ -16,9 +16,11 @@
 #    under the License.
 import netaddr
 
-from neutron.common import rpc as n_rpc
+from oslo.config import cfg
+from oslo import messaging
+
+from neutron.common import rpc
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
 from neutron.services.vpn.common import topics
 from neutron.services.vpn import service_drivers
 
@@ -34,14 +36,10 @@ class IPsecVpnDriverCallBack(object):
 
     # history
     #   1.0 Initial version
-
-    RPC_API_VERSION = BASE_IPSEC_VERSION
+    target = messaging.Target(version=BASE_IPSEC_VERSION)
 
     def __init__(self, driver):
         self.driver = driver
-
-    def create_rpc_dispatcher(self):
-        return n_rpc.PluginRpcDispatcher([self])
 
     def get_vpn_services_on_host(self, context, host=None):
         """Returns the vpnservices on the host."""
@@ -60,7 +58,7 @@ class IPsecVpnDriverCallBack(object):
 class IPsecVpnAgentApi(service_drivers.BaseIPsecVpnAgentApi):
     """Agent RPC API for IPsecVPNAgent."""
 
-    RPC_API_VERSION = BASE_IPSEC_VERSION
+    target = messaging.Target(version=BASE_IPSEC_VERSION)
 
     def __init__(self, topic, default_version):
         super(IPsecVpnAgentApi, self).__init__(
@@ -72,13 +70,12 @@ class IPsecVPNDriver(service_drivers.VpnDriver):
 
     def __init__(self, service_plugin):
         super(IPsecVPNDriver, self).__init__(service_plugin)
-        self.callbacks = IPsecVpnDriverCallBack(self)
-        self.conn = rpc.create_connection(new=True)
-        self.conn.create_consumer(
-            topics.IPSEC_DRIVER_TOPIC,
-            self.callbacks.create_rpc_dispatcher(),
-            fanout=False)
-        self.conn.consume_in_thread()
+        self.callbacks = [IPsecVpnDriverCallBack(self)]
+        target = messaging.Target(server=cfg.CONF.host,
+                                  topic=topics.IPSEC_DRIVER_TOPIC)
+        self.rpc_server = rpc.get_server(target, endpoints=self.callbacks)
+        self.rpc_server.start()
+
         self.agent_rpc = IPsecVpnAgentApi(
             topics.IPSEC_AGENT_TOPIC, BASE_IPSEC_VERSION)
 

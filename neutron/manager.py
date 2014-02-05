@@ -14,6 +14,7 @@
 #    under the License.
 
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.common import legacy
 from neutron.common import utils
@@ -31,7 +32,7 @@ LOG = logging.getLogger(__name__)
 class Manager(periodic_task.PeriodicTasks):
 
     # Set RPC API version to 1.0 by default.
-    RPC_API_VERSION = '1.0'
+    target = messaging.Target(version='1.0')
 
     def __init__(self, host=None):
         if not host:

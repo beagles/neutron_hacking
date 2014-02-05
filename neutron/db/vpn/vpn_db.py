@@ -168,6 +168,7 @@ class VPNPluginDb(VPNPluginBase, base_db.CommonDbMixin):
 
     def __init__(self):
         """Do the initialization for the vpn service plugin here."""
+        super(VPNPluginDb, self).__init__()
         qdbapi.register_models()
 
     def update_status(self, context, model, v_id, status):

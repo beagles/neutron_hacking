@@ -21,12 +21,15 @@
 
 import eventlet
 
+from oslo.config import cfg
+from oslo import messaging
+
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
 from neutron.api.rpc.agentnotifiers import l3_rpc_agent_api
 from neutron.api.v2 import attributes
 from neutron.common import constants
 from neutron.common import exceptions as n_exc
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.common import utils
 from neutron.db import agents_db
@@ -40,8 +43,7 @@ from neutron.db import portbindings_db
 from neutron.extensions import portbindings
 from neutron.extensions import providernet
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
-from neutron.openstack.common import uuidutils as uuidutils
+from neutron.openstack.common import uuidutils
 from neutron.plugins.cisco.common import cisco_constants as c_const
 from neutron.plugins.cisco.common import cisco_credentials_v2 as c_cred
 from neutron.plugins.cisco.common import cisco_exceptions
@@ -62,16 +64,7 @@ class N1kvRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
     """Class to handle agent RPC calls."""
 
     # Set RPC API version to 1.1 by default.
-    RPC_API_VERSION = '1.1'
-
-    def create_rpc_dispatcher(self):
-        """Get the rpc dispatcher for this rpc manager.
-
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        """
-        return q_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
+    target = messaging.Target(version='1.1')
 
 
 class N1kvNeutronPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
@@ -123,14 +116,18 @@ class N1kvNeutronPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
         # RPC support
         self.service_topics = {svc_constants.CORE: topics.PLUGIN,
                                svc_constants.L3_ROUTER_NAT: topics.L3PLUGIN}
-        self.conn = rpc.create_connection(new=True)
-        self.dispatcher = N1kvRpcCallbacks().create_rpc_dispatcher()
+
+        self.callbacks = [N1kvRpcCallbacks(), agents_db.AgentExtRpcCallback()]
+
+        self.rpc_servers = []
         for svc_topic in self.service_topics.values():
-            self.conn.create_consumer(svc_topic, self.dispatcher, fanout=False)
+            target = messaging.Target(topic=svc_topic, server=cfg.CONF.host)
+            rpc_server = rpc.get_server(target, self.callbacks)
+            rpc_server.start()
+            self.rpc_servers.append(rpc_server)
+
         self.dhcp_agent_notifier = dhcp_rpc_agent_api.DhcpAgentNotifyAPI()
-        self.l3_agent_notifier = l3_rpc_agent_api.L3AgentNotify
-        # Consume from all consumers in a thread
-        self.conn.consume_in_thread()
+        self.l3_agent_notifier = l3_rpc_agent_api.L3AgentNotifyAPI()
 
     def _setup_vsm(self):
         """

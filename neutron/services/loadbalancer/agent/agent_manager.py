@@ -17,6 +17,7 @@
 # @author: Mark McClain, DreamHost
 
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent import rpc as agent_rpc
 from neutron.common import constants as n_const
@@ -48,7 +49,7 @@ class DeviceNotFoundOnAgent(n_exc.NotFound):
 
 class LbaasAgentManager(periodic_task.PeriodicTasks):
 
-    RPC_API_VERSION = '2.0'
+    target = messaging.Target(version='2.0')
     # history
     #   1.0 Initial version
     #   1.1 Support agent_updated call
@@ -57,19 +58,19 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
     #       - added methods to handle create/update/delete for every lbaas
     #       object individually;
 
-    def __init__(self, conf):
-        self.conf = conf
+    def __init__(self, host):
+        self.conf = cfg.CONF
         self.context = context.get_admin_context_without_session()
         self.plugin_rpc = agent_api.LbaasAgentApi(
             topics.LOADBALANCER_PLUGIN,
             self.context,
-            self.conf.host
+            host
         )
         self._load_drivers()
 
         self.agent_state = {
             'binary': 'neutron-lbaas-agent',
-            'host': conf.host,
+            'host': host,
             'topic': topics.LOADBALANCER_AGENT,
             'configurations': {'device_drivers': self.device_drivers.keys()},
             'agent_type': n_const.AGENT_TYPE_LOADBALANCER,

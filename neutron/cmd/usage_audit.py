@@ -24,9 +24,9 @@ subnets.
 from oslo.config import cfg
 
 from neutron.common import config
+from neutron.common import rpc
 from neutron import context
 from neutron import manager
-from neutron.openstack.common.notifier import api as notifier_api
 
 
 def main():
@@ -35,33 +35,14 @@ def main():
 
     cxt = context.get_admin_context()
     plugin = manager.NeutronManager.get_plugin()
+    notifier = rpc.get_notifier(service='network')
     for network in plugin.get_networks(cxt):
-        notifier_api.notify(cxt,
-                            notifier_api.publisher_id('network'),
-                            'network.exists',
-                            notifier_api.INFO,
-                            {'network': network})
+        notifier.info(cxt, 'network.exists', {'network': network})
     for subnet in plugin.get_subnets(cxt):
-        notifier_api.notify(cxt,
-                            notifier_api.publisher_id('network'),
-                            'subnet.exists',
-                            notifier_api.INFO,
-                            {'subnet': subnet})
+        notifier.info(cxt, 'subnet.exists', {'subnet': subnet})
     for port in plugin.get_ports(cxt):
-        notifier_api.notify(cxt,
-                            notifier_api.publisher_id('network'),
-                            'port.exists',
-                            notifier_api.INFO,
-                            {'port': port})
+        notifier.info(cxt, 'port.exists', {'port': port})
     for router in plugin.get_routers(cxt):
-        notifier_api.notify(cxt,
-                            notifier_api.publisher_id('network'),
-                            'router.exists',
-                            notifier_api.INFO,
-                            {'router': router})
+        notifier.info(cxt, 'router.exists', {'router': router})
     for floatingip in plugin.get_floatingips(cxt):
-        notifier_api.notify(cxt,
-                            notifier_api.publisher_id('network'),
-                            'floatingip.exists',
-                            notifier_api.INFO,
-                            {'floatingip': floatingip})
+        notifier.info(cxt, 'floatingip.exists', {'floatingip': floatingip})

@@ -13,17 +13,17 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo import messaging
+
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.common import constants as q_const
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron.common import topics
-from neutron.db import agents_db
 from neutron.db import api as db_api
 from neutron.db import dhcp_rpc_base
 from neutron.db import securitygroups_rpc_base as sg_db_rpc
 from neutron import manager
 from neutron.openstack.common import log
-from neutron.openstack.common.rpc import proxy
 from neutron.openstack.common import uuidutils
 from neutron.plugins.ml2 import db
 from neutron.plugins.ml2 import driver_api as api
@@ -41,26 +41,10 @@ class RpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
                    sg_db_rpc.SecurityGroupServerRpcCallbackMixin,
                    type_tunnel.TunnelRpcCallbackMixin):
 
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
     # history
     #   1.0 Initial version (from openvswitch/linuxbridge)
     #   1.1 Support Security Group RPC
-
-    def __init__(self, notifier, type_manager):
-        # REVISIT(kmestery): This depends on the first three super classes
-        # not having their own __init__ functions. If an __init__() is added
-        # to one, this could break. Fix this and add a unit test to cover this
-        # test in H3.
-        super(RpcCallbacks, self).__init__(notifier, type_manager)
-
-    def create_rpc_dispatcher(self):
-        '''Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        '''
-        return q_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
 
     @classmethod
     def _device_to_port_id(cls, device):
@@ -199,8 +183,7 @@ class RpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
                                   q_const.PORT_STATUS_ACTIVE)
 
 
-class AgentNotifierApi(proxy.RpcProxy,
-                       sg_rpc.SecurityGroupAgentRpcApiMixin,
+class AgentNotifierApi(sg_rpc.SecurityGroupAgentRpcApiMixin,
                        type_tunnel.TunnelAgentRpcApiMixin):
     """Agent side of the openvswitch rpc API.
 
@@ -211,11 +194,11 @@ class AgentNotifierApi(proxy.RpcProxy,
 
     """
 
-    BASE_RPC_API_VERSION = '1.1'
-
     def __init__(self, topic):
-        super(AgentNotifierApi, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
+        super(AgentNotifierApi, self).__init__()
+        target = messaging.Target(topic=topic, version='1.1')
+        self.client = rpc.get_client(target)
+
         self.topic_network_delete = topics.get_topic_name(topic,
                                                           topics.NETWORK,
                                                           topics.DELETE)
@@ -224,17 +207,16 @@ class AgentNotifierApi(proxy.RpcProxy,
                                                        topics.UPDATE)
 
     def network_delete(self, context, network_id):
-        self.fanout_cast(context,
-                         self.make_msg('network_delete',
-                                       network_id=network_id),
-                         topic=self.topic_network_delete)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_network_delete)
+        cctxt.cast(context, 'network_delete', network_id=network_id)
 
     def port_update(self, context, port, network_type, segmentation_id,
                     physical_network):
-        self.fanout_cast(context,
-                         self.make_msg('port_update',
-                                       port=port,
-                                       network_type=network_type,
-                                       segmentation_id=segmentation_id,
-                                       physical_network=physical_network),
-                         topic=self.topic_port_update)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_port_update)
+        cctxt.cast(context, 'port_update',
+                   port=port,
+                   network_type=network_type,
+                   segmentation_id=segmentation_id,
+                   physical_network=physical_network)

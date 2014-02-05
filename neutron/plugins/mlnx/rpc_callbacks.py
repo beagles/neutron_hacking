@@ -14,11 +14,11 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.common import constants as q_const
-from neutron.common import rpc as q_rpc
-from neutron.db import agents_db
 from neutron.db import api as db_api
 from neutron.db import dhcp_rpc_base
 from neutron.db import l3_rpc_base
@@ -34,23 +34,13 @@ class MlnxRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin,
                        sg_db_rpc.SecurityGroupServerRpcCallbackMixin):
     # History
     #  1.1 Support Security Group RPC
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     #to be compatible with Linux Bridge Agent on Network Node
     TAP_PREFIX_LEN = 3
 
     def __init__(self):
         pass
-
-    def create_rpc_dispatcher(self):
-        """Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an RPC API version,
-        or support more than one class as the target of RPC messages,
-        override this method.
-        """
-        return q_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
 
     @classmethod
     def get_port_from_device(cls, device):

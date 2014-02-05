@@ -17,21 +17,22 @@
 # @author: Francois Eleouet, Orange
 # @author: Mathieu Rohon, Orange
 
+from oslo import messaging
+
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.openstack.common import log as logging
-from neutron.openstack.common.rpc import proxy
 
 
 LOG = logging.getLogger(__name__)
 
 
-class L2populationAgentNotifyAPI(proxy.RpcProxy):
-    BASE_RPC_API_VERSION = '1.0'
+class L2populationAgentNotifyAPI(object):
 
     def __init__(self, topic=topics.AGENT):
-        super(L2populationAgentNotifyAPI, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
-
+        super(L2populationAgentNotifyAPI, self).__init__()
+        target = messaging.Target(topic=topic, version='1.0')
+        self.client = rpc.get_client(target)
         self.topic_l2pop_update = topics.get_topic_name(topic,
                                                         topics.L2POPULATION,
                                                         topics.UPDATE)
@@ -39,24 +40,24 @@ class L2populationAgentNotifyAPI(proxy.RpcProxy):
     def _notification_fanout(self, context, method, fdb_entries):
         LOG.debug(_('Fanout notify l2population agents at %(topic)s '
                     'the message %(method)s with %(fdb_entries)s'),
-                  {'topic': self.topic,
+                  {'topic': self.client.target.topic,
                    'method': method,
                    'fdb_entries': fdb_entries})
 
-        self.fanout_cast(context,
-                         self.make_msg(method, fdb_entries=fdb_entries),
-                         topic=self.topic_l2pop_update)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_l2pop_update)
+        cctxt.cast(context, method, fdb_entries=fdb_entries)
 
     def _notification_host(self, context, method, fdb_entries, host):
         LOG.debug(_('Notify l2population agent %(host)s at %(topic)s the '
                     'message %(method)s with %(fdb_entries)s'),
                   {'host': host,
-                   'topic': self.topic,
+                   'topic': self.client.target.topic,
                    'method': method,
                    'fdb_entries': fdb_entries})
-        self.cast(context,
-                  self.make_msg(method, fdb_entries=fdb_entries),
-                  topic='%s.%s' % (self.topic_l2pop_update, host))
+        topic = '%s.%s' % (self.topic_l2pop_update, host)
+        cctxt = self.client.prepare(topic=topic)
+        cctxt.cast(context, method, fdb_entries=fdb_entries)
 
     def add_fdb_entries(self, context, fdb_entries, host=None):
         if fdb_entries:

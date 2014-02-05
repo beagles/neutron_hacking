@@ -50,6 +50,7 @@ import re
 
 import eventlet
 from oslo.config import cfg
+from oslo import messaging
 from sqlalchemy.orm import exc as sqlexc
 
 from neutron.agent import securitygroups_rpc as sg_rpc
@@ -57,7 +58,7 @@ from neutron.api import extensions as neutron_extensions
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
 from neutron.common import constants as const
 from neutron.common import exceptions
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron import context as qcontext
 from neutron.db import agents_db
@@ -81,7 +82,6 @@ from neutron import manager
 from neutron.openstack.common import excutils
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
 from neutron.plugins.bigswitch import config as pl_config
 from neutron.plugins.bigswitch.db import porttracker_db
 from neutron.plugins.bigswitch import extensions
@@ -95,32 +95,25 @@ SYNTAX_ERROR_MESSAGE = _('Syntax error in server config file, aborting plugin')
 METADATA_SERVER_IP = '169.254.169.254'
 
 
-class AgentNotifierApi(rpc.proxy.RpcProxy,
-                       sg_rpc.SecurityGroupAgentRpcApiMixin):
-
-    BASE_RPC_API_VERSION = '1.1'
+class AgentNotifierApi(sg_rpc.SecurityGroupAgentRpcApiMixin):
 
     def __init__(self, topic):
-        super(AgentNotifierApi, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
+        super(AgentNotifierApi, self).__init__()
+        target = messaging.Target(topic=topic, version='1.1')
+        self.client = rpc.get_client(target)
         self.topic_port_update = topics.get_topic_name(
             topic, topics.PORT, topics.UPDATE)
 
     def port_update(self, context, port):
-        self.fanout_cast(context,
-                         self.make_msg('port_update',
-                                       port=port),
-                         topic=self.topic_port_update)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_port_update)
+        cctxt.cast(context, 'port_update', port=port)
 
 
 class RestProxyCallbacks(sg_rpc_base.SecurityGroupServerRpcCallbackMixin,
                          dhcp_rpc_base.DhcpRpcCallbackMixin):
 
-    RPC_API_VERSION = '1.1'
-
-    def create_rpc_dispatcher(self):
-        return q_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
+    target = messaging.Target(version='1.1')
 
     def get_port_from_device(self, device):
         port_id = re.sub(r"^tap", "", device)
@@ -481,6 +474,7 @@ class NeutronRestProxyV2(NeutronRestProxyV2Base,
                                                'get_floating_ips': True,
                                                'get_routers': True}
 
+        # init dhcp support
         self.network_scheduler = importutils.import_object(
             cfg.CONF.network_scheduler_driver
         )
@@ -494,20 +488,17 @@ class NeutronRestProxyV2(NeutronRestProxyV2Base,
         LOG.debug(_("NeutronRestProxyV2: initialization done"))
 
     def _setup_rpc(self):
-        self.conn = rpc.create_connection(new=True)
-        self.topic = topics.PLUGIN
         self.notifier = AgentNotifierApi(topics.AGENT)
         # init dhcp agent support
         self._dhcp_agent_notifier = dhcp_rpc_agent_api.DhcpAgentNotifyAPI()
         self.agent_notifiers[const.AGENT_TYPE_DHCP] = (
             self._dhcp_agent_notifier
         )
-        self.callbacks = RestProxyCallbacks()
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
-        self.conn.create_consumer(self.topic, self.dispatcher,
-                                  fanout=False)
-        # Consume from all consumers in a thread
-        self.conn.consume_in_thread()
+        self.callbacks = [RestProxyCallbacks(),
+                          agents_db.AgentExtRpcCallback()]
+        target = messaging.Target(topic=topics.PLUGIN, server=cfg.CONF.host)
+        self.rpc_server = rpc.get_server(target, endpoints=self.callbacks)
+        self.rpc_server.start()
 
     def create_network(self, context, network):
         """Create a network.

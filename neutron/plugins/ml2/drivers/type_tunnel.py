@@ -121,13 +121,13 @@ class TunnelRpcCallbackMixin(object):
 class TunnelAgentRpcApiMixin(object):
 
     def _get_tunnel_update_topic(self):
-        return topics.get_topic_name(self.topic,
+        return topics.get_topic_name(self.client.target.topic,
                                      TUNNEL,
                                      topics.UPDATE)
 
     def tunnel_update(self, context, tunnel_ip, tunnel_type):
-        self.fanout_cast(context,
-                         self.make_msg('tunnel_update',
-                                       tunnel_ip=tunnel_ip,
-                                       tunnel_type=tunnel_type),
-                         topic=self._get_tunnel_update_topic())
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self._get_tunnel_update_topic())
+        cctxt.cast(context, 'tunnel_update',
+                   tunnel_ip=tunnel_ip,
+                   tunnel_type=tunnel_type)

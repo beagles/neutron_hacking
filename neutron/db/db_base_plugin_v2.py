@@ -220,6 +220,7 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
     __native_sorting_support = True
 
     def __init__(self):
+        super(NeutronDbPluginV2, self).__init__()
         db.configure_db()
 
     @classmethod

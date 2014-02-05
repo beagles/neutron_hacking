@@ -22,6 +22,7 @@ import time
 
 import eventlet
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import ovs_lib
@@ -32,7 +33,6 @@ from neutron.common import topics
 from neutron.common import utils as q_utils
 from neutron import context
 from neutron.openstack.common import log as logging
-from neutron.openstack.common.rpc import dispatcher
 from neutron.plugins.ibm.common import config  # noqa
 from neutron.plugins.ibm.common import constants
 
@@ -43,14 +43,12 @@ LOG = logging.getLogger(__name__)
 class SdnvePluginApi(agent_rpc.PluginApi):
 
     def sdnve_info(self, context, info):
-        return self.call(context,
-                         self.make_msg('sdnve_info', info=info),
-                         topic=self.topic)
+        return self.client.call(context, 'sdnve_info', info=info)
 
 
 class SdnveNeutronAgent():
 
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     def __init__(self, integ_br, interface_mappings,
                  info, root_helper, polling_interval,
@@ -94,17 +92,16 @@ class SdnveNeutronAgent():
             nameaddr = socket.gethostbyname(socket.gethostname())
             self.agent_id = '%s%s' % ('sdnve_', (nameaddr.replace(".", "_")))
 
-        self.topic = topics.AGENT
         self.plugin_rpc = SdnvePluginApi(topics.PLUGIN)
         self.state_rpc = agent_rpc.PluginReportStateAPI(topics.PLUGIN)
 
         self.context = context.get_admin_context_without_session()
-        self.dispatcher = self.create_rpc_dispatcher()
         consumers = [[constants.INFO, topics.UPDATE]]
 
-        self.connection = agent_rpc.create_consumers(self.dispatcher,
-                                                     self.topic,
-                                                     consumers)
+        self.callbacks = [self]
+        self.rpc_servers = agent_rpc.create_servers(self.callbacks,
+                                                    topics.AGENT,
+                                                    consumers)
 
     # Plugin calls the agents through the following
     def info_update(self, context, **kwargs):
@@ -125,9 +122,6 @@ class SdnveNeutronAgent():
                                              self.int_bridge_name,
                                              "connection-mode",
                                              "out-of-band")
-
-    def create_rpc_dispatcher(self):
-        return dispatcher.RpcDispatcher([self])
 
     def setup_integration_br(self, bridge_name, reset_br, out_of_band,
                              controller_ip=None):

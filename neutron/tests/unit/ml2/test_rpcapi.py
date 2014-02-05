@@ -22,7 +22,7 @@ import mock
 from neutron.agent import rpc as agent_rpc
 from neutron.common import topics
 from neutron.openstack.common import context
-from neutron.openstack.common import rpc
+
 from neutron.plugins.ml2.drivers import type_tunnel
 from neutron.plugins.ml2 import rpc as plugin_rpc
 from neutron.tests import base
@@ -30,26 +30,33 @@ from neutron.tests import base
 
 class RpcApiTestCase(base.BaseTestCase):
 
-    def _test_rpc_api(self, rpcapi, topic, method, rpc_method, **kwargs):
+    def _test_rpc_api(self, rpcapi, topic, method, rpc_method, fanout,
+                      **kwargs):
         ctxt = context.RequestContext('fake_user', 'fake_project')
         expected_retval = 'foo' if method == 'call' else None
-        expected_msg = rpcapi.make_msg(method, **kwargs)
-        expected_msg['version'] = rpcapi.BASE_RPC_API_VERSION
-        if rpc_method == 'cast' and method == 'run_instance':
-            kwargs['call'] = False
+        expected_msg = kwargs.copy()
 
-        rpc_method_mock = mock.Mock()
-        rpc_method_mock.return_value = expected_retval
-        setattr(rpc, rpc_method, rpc_method_mock)
+        with mock.patch.object(rpcapi.client, 'prepare') as mock_prepare:
+            rpc_method_mock = getattr(mock_prepare.return_value, rpc_method)
+            rpc_method_mock.return_value = expected_retval
 
-        retval = getattr(rpcapi, method)(ctxt, **kwargs)
+            retval = getattr(rpcapi, method)(ctxt, **kwargs)
 
-        self.assertEqual(retval, expected_retval)
+            self.assertEqual(expected_retval, retval)
 
-        expected_args = [ctxt, topic, expected_msg]
-        for arg, expected_arg in zip(rpc_method_mock.call_args[0],
-                                     expected_args):
-            self.assertEqual(arg, expected_arg)
+            expected_prepare_args = {}
+            if fanout:
+                expected_prepare_args['fanout'] = fanout
+            if topic != topics.PLUGIN:
+                expected_prepare_args['topic'] = topic
+
+            mock_prepare.assert_called_with(**expected_prepare_args)
+
+            rpc_method_mock = getattr(mock_prepare.return_value, rpc_method)
+            rpc_method_mock.assert_called_with(
+                ctxt,
+                method,
+                **expected_msg)
 
     def test_delete_network(self):
         rpcapi = plugin_rpc.AgentNotifierApi(topics.AGENT)
@@ -57,7 +64,7 @@ class RpcApiTestCase(base.BaseTestCase):
                            topics.get_topic_name(topics.AGENT,
                                                  topics.NETWORK,
                                                  topics.DELETE),
-                           'network_delete', rpc_method='fanout_cast',
+                           'network_delete', rpc_method='cast', fanout=True,
                            network_id='fake_request_spec')
 
     def test_port_update(self):
@@ -66,7 +73,7 @@ class RpcApiTestCase(base.BaseTestCase):
                            topics.get_topic_name(topics.AGENT,
                                                  topics.PORT,
                                                  topics.UPDATE),
-                           'port_update', rpc_method='fanout_cast',
+                           'port_update', rpc_method='cast', fanout=True,
                            port='fake_port',
                            network_type='fake_network_type',
                            segmentation_id='fake_segmentation_id',
@@ -78,13 +85,14 @@ class RpcApiTestCase(base.BaseTestCase):
                            topics.get_topic_name(topics.AGENT,
                                                  type_tunnel.TUNNEL,
                                                  topics.UPDATE),
-                           'tunnel_update', rpc_method='fanout_cast',
+                           'tunnel_update', rpc_method='cast', fanout=True,
                            tunnel_ip='fake_ip', tunnel_type='gre')
 
     def test_device_details(self):
         rpcapi = agent_rpc.PluginApi(topics.PLUGIN)
         self._test_rpc_api(rpcapi, topics.PLUGIN,
                            'get_device_details', rpc_method='call',
+                           fanout=False,
                            device='fake_device',
                            agent_id='fake_agent_id')
 
@@ -92,6 +100,7 @@ class RpcApiTestCase(base.BaseTestCase):
         rpcapi = agent_rpc.PluginApi(topics.PLUGIN)
         self._test_rpc_api(rpcapi, topics.PLUGIN,
                            'update_device_down', rpc_method='call',
+                           fanout=False,
                            device='fake_device',
                            agent_id='fake_agent_id',
                            host='fake_host')
@@ -100,6 +109,7 @@ class RpcApiTestCase(base.BaseTestCase):
         rpcapi = agent_rpc.PluginApi(topics.PLUGIN)
         self._test_rpc_api(rpcapi, topics.PLUGIN,
                            'tunnel_sync', rpc_method='call',
+                           fanout=False,
                            tunnel_ip='fake_tunnel_ip',
                            tunnel_type=None)
 
@@ -107,6 +117,7 @@ class RpcApiTestCase(base.BaseTestCase):
         rpcapi = agent_rpc.PluginApi(topics.PLUGIN)
         self._test_rpc_api(rpcapi, topics.PLUGIN,
                            'update_device_up', rpc_method='call',
+                           fanout=False,
                            device='fake_device',
                            agent_id='fake_agent_id',
                            host='fake_host')

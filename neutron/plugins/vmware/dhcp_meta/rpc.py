@@ -19,13 +19,12 @@
 from eventlet import greenthread
 import netaddr
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
 from neutron.api.v2 import attributes
 from neutron.common import constants as const
 from neutron.common import exceptions as ntn_exc
-from neutron.common import rpc as n_rpc
-from neutron.db import agents_db
 from neutron.db import db_base_plugin_v2
 from neutron.db import dhcp_rpc_base
 from neutron.db import l3_db
@@ -45,16 +44,7 @@ METADATA_DHCP_ROUTE = '169.254.169.254/32'
 
 class NSXRpcCallbacks(dhcp_rpc_base.DhcpRpcCallbackMixin):
 
-    RPC_API_VERSION = '1.1'
-
-    def create_rpc_dispatcher(self):
-        '''Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        '''
-        return n_rpc.PluginRpcDispatcher([self,
-                                          agents_db.AgentExtRpcCallback()])
+    target = messaging.Target(version='1.1')
 
 
 def handle_network_dhcp_access(plugin, context, network, action):

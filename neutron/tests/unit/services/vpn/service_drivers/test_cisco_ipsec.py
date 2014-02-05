@@ -45,7 +45,7 @@ class TestCiscoIPsecDriverValidation(base.BaseTestCase):
     def setUp(self):
         super(TestCiscoIPsecDriverValidation, self).setUp()
         self.addCleanup(mock.patch.stopall)
-        mock.patch('neutron.openstack.common.rpc.create_connection').start()
+        mock.patch('neutron.common.rpc.get_server').start()
         self.service_plugin = mock.Mock()
         self.driver = ipsec_driver.CiscoCsrIPsecVPNDriver(self.service_plugin)
         self.context = n_ctx.Context('some_user', 'some_tenant')
@@ -287,7 +287,7 @@ class TestCiscoIPsecDriver(base.BaseTestCase):
         self.addCleanup(mock.patch.stopall)
         dbapi.configure_db()
         self.addCleanup(dbapi.clear_db)
-        mock.patch('neutron.openstack.common.rpc.create_connection').start()
+        mock.patch('neutron.common.rpc.get_server').start()
 
         l3_agent = mock.Mock()
         l3_agent.host = FAKE_HOST
@@ -313,15 +313,15 @@ class TestCiscoIPsecDriver(base.BaseTestCase):
         self.context = n_ctx.Context('some_user', 'some_tenant')
 
     def _test_update(self, func, args):
-        with mock.patch.object(self.driver.agent_rpc, 'cast') as cast:
+        client = self.driver.agent_rpc.client
+        with mock.patch.object(client, 'prepare') as prepare:
             func(self.context, *args)
-            cast.assert_called_once_with(
-                self.context,
-                {'args': {},
-                 'namespace': None,
-                 'method': 'vpnservice_updated'},
+            prepare.assert_called_once_with(
                 version='1.0',
                 topic='cisco_csr_ipsec_agent.fake_host')
+            prepare.return_value.cast.assert_called_once_with(
+                self.context,
+                'vpnservice_updated')
 
     def test_create_ipsec_site_connection(self):
         self._test_update(self.driver.create_ipsec_site_connection,

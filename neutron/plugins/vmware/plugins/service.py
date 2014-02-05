@@ -81,8 +81,7 @@ class NsxAdvancedPlugin(sr_db.ServiceRouter_mixin,
                         rsi_db.RoutedServiceInsertionDbMixin,
                         firewall_db.Firewall_db_mixin,
                         loadbalancer_db.LoadBalancerPluginDb,
-                        vpn_db.VPNPluginDb
-                        ):
+                        vpn_db.VPNPluginDb):
 
     supported_extension_aliases = (
         base.NsxPluginV2.supported_extension_aliases + [
@@ -108,7 +107,7 @@ class NsxAdvancedPlugin(sr_db.ServiceRouter_mixin,
 
         # cache router type based on router id
         self._router_type = {}
-        self.callbacks = VcnsCallbacks(self)
+        self.callbacks = [VcnsCallbacks(self)]
 
         # load the vCNS driver
         self._load_vcns_drivers()

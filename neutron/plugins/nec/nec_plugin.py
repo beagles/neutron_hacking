@@ -16,13 +16,16 @@
 # @author: Ryota MIBU
 # @author: Akihiro MOTOKI
 
+from oslo.config import cfg
+from oslo import messaging
+
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.api import extensions as neutron_extensions
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
 from neutron.api.v2 import attributes as attrs
 from neutron.common import constants as const
 from neutron.common import exceptions as n_exc
-from neutron.common import rpc as q_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.db import agents_db
 from neutron.db import agentschedulers_db
@@ -40,8 +43,8 @@ from neutron.extensions import allowedaddresspairs as addr_pair
 from neutron.extensions import portbindings
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
-from neutron.openstack.common.rpc import proxy
+
+
 from neutron.openstack.common import uuidutils
 from neutron.plugins.common import constants as svc_constants
 from neutron.plugins.nec.common import config
@@ -137,7 +140,7 @@ class NECPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
     def setup_rpc(self):
         self.service_topics = {svc_constants.CORE: topics.PLUGIN,
                                svc_constants.L3_ROUTER_NAT: topics.L3PLUGIN}
-        self.conn = rpc.create_connection(new=True)
+
         self.notifier = NECPluginV2AgentNotifierApi(topics.AGENT)
         self.agent_notifiers[const.AGENT_TYPE_DHCP] = (
             dhcp_rpc_agent_api.DhcpAgentNotifyAPI()
@@ -148,16 +151,18 @@ class NECPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
 
         # NOTE: callback_sg is referred to from the sg unit test.
         self.callback_sg = SecurityGroupServerRpcCallback()
-        callbacks = [NECPluginV2RPCCallbacks(self),
-                     DhcpRpcCallback(),
-                     L3RpcCallback(),
-                     self.callback_sg,
-                     agents_db.AgentExtRpcCallback()]
-        self.dispatcher = q_rpc.PluginRpcDispatcher(callbacks)
+        self.callbacks = [NECPluginV2RPCCallbacks(self),
+                          DhcpRpcCallback(),
+                          L3RpcCallback(),
+                          self.callback_sg,
+                          agents_db.AgentExtRpcCallback()]
+
+        self.rpc_servers = []
         for svc_topic in self.service_topics.values():
-            self.conn.create_consumer(svc_topic, self.dispatcher, fanout=False)
-        # Consume from all consumers in a thread
-        self.conn.consume_in_thread()
+            target = messaging.Target(topic=svc_topic, server=cfg.CONF.host)
+            rpc_server = rpc.get_server(target, self.callbacks)
+            rpc_server.start()
+            self.rpc_servers.append(rpc_server)
 
     def _update_resource_status(self, context, resource, id, status):
         """Update status of specified resource."""
@@ -660,39 +665,36 @@ class NECPluginV2(db_base_plugin_v2.NeutronDbPluginV2,
             self.delete_port(context, port_id)
 
 
-class NECPluginV2AgentNotifierApi(proxy.RpcProxy,
-                                  sg_rpc.SecurityGroupAgentRpcApiMixin):
+class NECPluginV2AgentNotifierApi(sg_rpc.SecurityGroupAgentRpcApiMixin):
     '''RPC API for NEC plugin agent.'''
 
-    BASE_RPC_API_VERSION = '1.0'
-
     def __init__(self, topic):
-        super(NECPluginV2AgentNotifierApi, self).__init__(
-            topic=topic, default_version=self.BASE_RPC_API_VERSION)
+        super(NECPluginV2AgentNotifierApi, self).__init__()
+        target = messaging.Target(topic=topic, version='1.0')
+        self.client = rpc.get_client(target)
         self.topic_port_update = topics.get_topic_name(
             topic, topics.PORT, topics.UPDATE)
 
     def port_update(self, context, port):
-        self.fanout_cast(context,
-                         self.make_msg('port_update',
-                                       port=port),
-                         topic=self.topic_port_update)
+        cctxt = self.client.prepare(fanout=True,
+                                    topic=self.topic_port_update)
+        cctxt.cast(context, 'port_update', port=port)
 
 
 class DhcpRpcCallback(dhcp_rpc_base.DhcpRpcCallbackMixin):
-    # DhcpPluginApi BASE_RPC_API_VERSION
-    RPC_API_VERSION = '1.1'
+    # DhcpPluginApi.client.target.version
+    target = messaging.Target(version='1.1')
 
 
 class L3RpcCallback(l3_rpc_base.L3RpcCallbackMixin):
-    # L3PluginApi BASE_RPC_API_VERSION
-    RPC_API_VERSION = '1.0'
+    # L3PluginApi.client.target.version
+    target = messaging.Target(version='1.1')
 
 
 class SecurityGroupServerRpcCallback(
     sg_db_rpc.SecurityGroupServerRpcCallbackMixin):
 
-    RPC_API_VERSION = sg_rpc.SG_RPC_VERSION
+    target = messaging.Target(version=sg_rpc.SG_RPC_VERSION)
 
     @staticmethod
     def get_port_from_device(device):
@@ -707,18 +709,10 @@ class SecurityGroupServerRpcCallback(
 
 class NECPluginV2RPCCallbacks(object):
 
-    RPC_API_VERSION = '1.0'
+    target = messaging.Target(version='1.0')
 
     def __init__(self, plugin):
         self.plugin = plugin
-
-    def create_rpc_dispatcher(self):
-        '''Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        '''
-        return q_rpc.PluginRpcDispatcher([self])
 
     def update_ports(self, rpc_context, **kwargs):
         """Update ports' information and activate/deavtivate them.

@@ -14,14 +14,19 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import sys
 import time
 
 import eventlet
+
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent.common import config
 from neutron.agent import rpc as agent_rpc
-from neutron.common import constants as constants
+from neutron.common import config as common_config
+from neutron.common import constants
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.common import utils
 from neutron import context
@@ -29,9 +34,8 @@ from neutron import manager
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
-from neutron.openstack.common.notifier import api as notifier_api
 from neutron.openstack.common import periodic_task
-from neutron.openstack.common.rpc import proxy
+
 from neutron.openstack.common import service
 from neutron import service as neutron_service
 
@@ -39,21 +43,19 @@ from neutron import service as neutron_service
 LOG = logging.getLogger(__name__)
 
 
-class MeteringPluginRpc(proxy.RpcProxy):
-
-    BASE_RPC_API_VERSION = '1.0'
+class MeteringPluginRpc(object):
 
     def __init__(self, host):
-        super(MeteringPluginRpc,
-              self).__init__(topic=topics.METERING_AGENT,
-                             default_version=self.BASE_RPC_API_VERSION)
+        super(MeteringPluginRpc, self).__init__()
+        target = messaging.Target(topic=topics.METERING_AGENT, version='1.0')
+        self.client = rpc.get_client(target)
+        self.host = host
 
     def _get_sync_data_metering(self, context):
         try:
-            return self.call(context,
-                             self.make_msg('get_sync_data_metering',
-                                           host=self.host),
-                             topic=topics.METERING_PLUGIN)
+            cctxt = self.client.prepare(topic=topics.METERING_PLUGIN)
+            return cctxt.call(context, 'get_sync_data_metering',
+                              host=self.host)
         except Exception:
             LOG.exception(_("Failed synchronizing routers"))
 
@@ -88,6 +90,8 @@ class MeteringAgent(MeteringPluginRpc, manager.Manager):
         self.label_tenant_id = {}
         self.routers = {}
         self.metering_infos = {}
+
+        self.notifier = rpc.get_notifier(service='metering')
         super(MeteringAgent, self).__init__(host=self.conf.host)
 
     def _load_drivers(self):
@@ -110,11 +114,8 @@ class MeteringAgent(MeteringPluginRpc, manager.Manager):
                     'host': self.host}
 
             LOG.debug(_("Send metering report: %s"), data)
-            notifier_api.notify(self.context,
-                                notifier_api.publisher_id('metering'),
-                                'l3.meter',
-                                notifier_api.CONF.default_notification_level,
-                                data)
+            self.notifier._notify(self.context, 'l3.meter', data,
+                                  self.conf.default_notification_level)
             info['pkts'] = 0
             info['bytes'] = 0
             info['time'] = 0
@@ -286,7 +287,7 @@ def main():
     conf.register_opts(MeteringAgent.Opts)
     config.register_agent_state_opts_helper(conf)
     config.register_root_helper(conf)
-    conf(project='neutron')
+    common_config.parse(sys.argv[1:])
     config.setup_logging(conf)
     server = neutron_service.Service.create(
         binary='neutron-metering-agent',

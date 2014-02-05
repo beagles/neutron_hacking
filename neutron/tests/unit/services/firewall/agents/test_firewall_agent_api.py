@@ -19,7 +19,6 @@
 # @author: Sridar Kandaswamy, skandasw@cisco.com, Cisco Systems, Inc.
 # @author: Dan Florea, dflorea@cisco.com, Cisco Systems, Inc.
 
-import contextlib
 import mock
 
 from neutron.services.firewall.agents import firewall_agent_api as api
@@ -51,20 +50,13 @@ class TestFWaaSAgentApi(base.BaseTestCase):
     def setUp(self):
         super(TestFWaaSAgentApi, self).setUp()
         self.addCleanup(mock.patch.stopall)
-
-        self.api = api.FWaaSPluginApiMixin(
-            'topic',
-            'host')
+        self.api = api.FWaaSPluginApiMixin('topic', 'host')
 
     def test_init(self):
         self.assertEqual(self.api.host, 'host')
 
     def test_set_firewall_status(self):
-        with contextlib.nested(
-            mock.patch.object(self.api, 'make_msg'),
-            mock.patch.object(self.api, 'call')
-        ) as (mock_make_msg, mock_call):
-
+        with mock.patch.object(self.api.client, 'call') as mock_call:
             self.assertEqual(
                 self.api.set_firewall_status(
                     mock.sentinel.context,
@@ -72,35 +64,23 @@ class TestFWaaSAgentApi(base.BaseTestCase):
                     'status'),
                 mock_call.return_value)
 
-            mock_make_msg.assert_called_once_with(
+            mock_call.assert_called_once_with(
+                mock.sentinel.context,
                 'set_firewall_status',
                 host='host',
                 firewall_id='firewall_id',
                 status='status')
 
-            mock_call.assert_called_once_with(
-                mock.sentinel.context,
-                mock_make_msg.return_value,
-                topic='topic')
-
     def test_firewall_deleted(self):
-        with contextlib.nested(
-            mock.patch.object(self.api, 'make_msg'),
-            mock.patch.object(self.api, 'call')
-        ) as (mock_make_msg, mock_call):
-
+        with mock.patch.object(self.api.client, 'call') as mock_call:
             self.assertEqual(
                 self.api.firewall_deleted(
                     mock.sentinel.context,
                     'firewall_id'),
                 mock_call.return_value)
 
-            mock_make_msg.assert_called_once_with(
+            mock_call.assert_called_once_with(
+                mock.sentinel.context,
                 'firewall_deleted',
                 host='host',
                 firewall_id='firewall_id')
-
-            mock_call.assert_called_once_with(
-                mock.sentinel.context,
-                mock_make_msg.return_value,
-                topic='topic')

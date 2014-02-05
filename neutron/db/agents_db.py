@@ -18,6 +18,7 @@
 from eventlet import greenthread
 
 from oslo.config import cfg
+from oslo import messaging
 import sqlalchemy as sa
 from sqlalchemy.orm import exc
 
@@ -200,7 +201,7 @@ class AgentDbMixin(ext_agent.AgentPluginBase):
 class AgentExtRpcCallback(object):
     """Processes the rpc report in plugin implementations."""
 
-    RPC_API_VERSION = '1.0'
+    target = messaging.Target(version='1.0')
     START_TIME = timeutils.utcnow()
 
     def __init__(self, plugin=None):

@@ -14,12 +14,13 @@
 
 import netaddr
 from netaddr import core as net_exc
+from oslo.config import cfg
+from oslo import messaging
 
 from neutron.common import exceptions
-from neutron.common import rpc as n_rpc
+from neutron.common import rpc
 from neutron.openstack.common import excutils
 from neutron.openstack.common import log as logging
-from neutron.openstack.common import rpc
 from neutron.plugins.common import constants
 from neutron.services.vpn.common import topics
 from neutron.services.vpn import service_drivers
@@ -51,14 +52,11 @@ class CiscoCsrIPsecVpnDriverCallBack(object):
 
     # history
     #   1.0 Initial version
-
-    RPC_API_VERSION = BASE_IPSEC_VERSION
+    target = messaging.Target(version=BASE_IPSEC_VERSION)
 
     def __init__(self, driver):
+        super(CiscoCsrIPsecVpnDriverCallBack, self).__init__()
         self.driver = driver
-
-    def create_rpc_dispatcher(self):
-        return n_rpc.PluginRpcDispatcher([self])
 
     def get_vpn_services_on_host(self, context, host=None):
         """Retuns info on the vpnservices on the host."""
@@ -78,7 +76,7 @@ class CiscoCsrIPsecVpnAgentApi(service_drivers.BaseIPsecVpnAgentApi):
 
     """API and handler for Cisco IPSec plugin to agent RPC messaging."""
 
-    RPC_API_VERSION = BASE_IPSEC_VERSION
+    target = messaging.Target(version=BASE_IPSEC_VERSION)
 
     def __init__(self, topic, default_version):
         super(CiscoCsrIPsecVpnAgentApi, self).__init__(
@@ -91,13 +89,14 @@ class CiscoCsrIPsecVPNDriver(service_drivers.VpnDriver):
 
     def __init__(self, service_plugin):
         super(CiscoCsrIPsecVPNDriver, self).__init__(service_plugin)
-        self.callbacks = CiscoCsrIPsecVpnDriverCallBack(self)
-        self.conn = rpc.create_connection(new=True)
-        self.conn.create_consumer(
-            topics.CISCO_IPSEC_DRIVER_TOPIC,
-            self.callbacks.create_rpc_dispatcher(),
-            fanout=False)
-        self.conn.consume_in_thread()
+        self.callbacks = [CiscoCsrIPsecVpnDriverCallBack(self)]
+
+        target = messaging.Target(
+            server=cfg.CONF.host,
+            topic=topics.CISCO_IPSEC_DRIVER_TOPIC)
+        self.rpc_server = rpc.get_server(target, self.callbacks)
+        self.rpc_server.start()
+
         self.agent_rpc = CiscoCsrIPsecVpnAgentApi(
             topics.CISCO_IPSEC_AGENT_TOPIC, BASE_IPSEC_VERSION)
 

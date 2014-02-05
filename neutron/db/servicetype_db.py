@@ -48,6 +48,7 @@ class ServiceTypeManager(object):
         return cls._instance
 
     def __init__(self):
+        super(ServiceTypeManager, self).__init__()
         self._initialize_db()
         self._load_conf()
 

@@ -30,6 +30,7 @@ import time
 
 import eventlet
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent import l2population_rpc as l2pop_rpc
 from neutron.agent.linux import ip_lib
@@ -43,8 +44,8 @@ from neutron.common import utils as q_utils
 from neutron import context
 from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
-from neutron.openstack.common.rpc import common as rpc_common
-from neutron.openstack.common.rpc import dispatcher
+
+
 from neutron.plugins.common import constants as p_const
 from neutron.plugins.linuxbridge.common import config  # noqa
 from neutron.plugins.linuxbridge.common import constants as lconst
@@ -601,10 +602,9 @@ class LinuxBridgeManager:
 class LinuxBridgeRpcCallbacks(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                               l2pop_rpc.L2populationRpcCallBackMixin):
 
-    # Set RPC API version to 1.0 by default.
     # history
     #   1.1 Support Security Group RPC
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     def __init__(self, context, agent):
         self.context = context
@@ -668,7 +668,7 @@ class LinuxBridgeRpcCallbacks(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                                                          tap_device_name,
                                                          self.agent.agent_id,
                                                          cfg.CONF.host)
-        except rpc_common.Timeout:
+        except messaging.MessagingTimeout:
             LOG.error(_("RPC timeout while updating port %s"), port['id'])
 
     def fdb_add(self, context, fdb_entries):
@@ -749,14 +749,6 @@ class LinuxBridgeRpcCallbacks(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
             getattr(self, method)(context, values)
 
-    def create_rpc_dispatcher(self):
-        '''Get the rpc dispatcher for this manager.
-
-        If a manager would like to set an rpc API version, or support more than
-        one class as the target of rpc messages, override this method.
-        '''
-        return dispatcher.RpcDispatcher([self])
-
 
 class LinuxBridgePluginApi(agent_rpc.PluginApi,
                            sg_rpc.SecurityGroupServerRpcApiMixin):
@@ -816,9 +808,7 @@ class LinuxBridgeNeutronAgentRPC(sg_rpc.SecurityGroupAgentRpcMixin):
         # RPC network init
         self.context = context.get_admin_context_without_session()
         # Handle updates from service
-        self.callbacks = LinuxBridgeRpcCallbacks(self.context,
-                                                 self)
-        self.dispatcher = self.callbacks.create_rpc_dispatcher()
+        self.callbacks = [LinuxBridgeRpcCallbacks(self.context, self)]
         # Define the listening consumers for the agent
         consumers = [[topics.PORT, topics.UPDATE],
                      [topics.NETWORK, topics.DELETE],
@@ -826,9 +816,9 @@ class LinuxBridgeNeutronAgentRPC(sg_rpc.SecurityGroupAgentRpcMixin):
         if cfg.CONF.VXLAN.l2_population:
             consumers.append([topics.L2POPULATION,
                               topics.UPDATE, cfg.CONF.host])
-        self.connection = agent_rpc.create_consumers(self.dispatcher,
-                                                     self.topic,
-                                                     consumers)
+        self.rpc_servers = agent_rpc.create_servers(self.callbacks,
+                                                    self.topic,
+                                                    consumers)
         report_interval = cfg.CONF.AGENT.report_interval
         if report_interval:
             heartbeat = loopingcall.FixedIntervalLoopingCall(

@@ -14,22 +14,22 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from oslo.config import cfg
+from oslo import messaging
+
 from neutron.api.rpc.agentnotifiers import metering_rpc_agent_api
-from neutron.common import rpc as p_rpc
+from neutron.common import rpc
 from neutron.common import topics
 from neutron.db.metering import metering_db
-from neutron.openstack.common import rpc
 
 
 class MeteringCallbacks(metering_db.MeteringDbMixin):
 
-    RPC_API_VERSION = '1.0'
+    target = messaging.Target(version='1.0')
 
     def __init__(self, plugin):
+        super(MeteringCallbacks, self).__init__()
         self.plugin = plugin
-
-    def create_rpc_dispatcher(self):
-        return p_rpc.PluginRpcDispatcher([self])
 
     def get_sync_data_metering(self, context, **kwargs):
         return super(MeteringCallbacks, self).get_sync_data_metering(context)
@@ -42,14 +42,12 @@ class MeteringPlugin(metering_db.MeteringDbMixin):
     def __init__(self):
         super(MeteringPlugin, self).__init__()
 
-        self.callbacks = MeteringCallbacks(self)
+        self.callbacks = [MeteringCallbacks(self)]
 
-        self.conn = rpc.create_connection(new=True)
-        self.conn.create_consumer(
-            topics.METERING_PLUGIN,
-            self.callbacks.create_rpc_dispatcher(),
-            fanout=False)
-        self.conn.consume_in_thread()
+        target = messaging.Target(topic=topics.METERING_PLUGIN,
+                                  server=cfg.CONF.host)
+        self.rpc_server = rpc.get_server(target, endpoints=self.callbacks)
+        self.rpc_server.start()
 
         self.meter_rpc = metering_rpc_agent_api.MeteringAgentNotifyAPI()
 

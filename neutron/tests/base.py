@@ -24,9 +24,11 @@ import os
 import eventlet.timeout
 import fixtures
 from oslo.config import cfg
+from oslo.messaging import conffixture as messaging_conffixture
 import testtools
 
 from neutron import manager
+from neutron.tests.fake_notifier import FakeNotifier
 from neutron.tests import post_mortem_debug
 
 
@@ -93,6 +95,21 @@ class BaseTestCase(testtools.TestCase):
         self.useFixture(fixtures.MonkeyPatch(
             'neutron.common.exceptions.NeutronException.use_fatal_exceptions',
             fake_use_fatal_exceptions))
+        self.useFixture(fixtures.MonkeyPatch(
+            'oslo.messaging.Notifier', FakeNotifier))
+
+        # TODO(ihrachys): try to make import global
+        from neutron.common import rpc
+        rpc.add_extra_exmods('neutron.test')
+        self.addCleanup(rpc.clear_extra_exmods)
+        self.addCleanup(rpc.cleanup)
+
+        self.messaging_conf = messaging_conffixture.ConfFixture(CONF)
+        self.messaging_conf.transport_driver = 'fake'
+        self.messaging_conf.response_timeout = 15
+        self.useFixture(self.messaging_conf)
+
+        rpc.init(CONF)
 
     def config(self, **kw):
         """Override some configuration values.

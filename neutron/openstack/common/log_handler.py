@@ -16,7 +16,7 @@ import logging
 
 from oslo.config import cfg
 
-from neutron.openstack.common import notifier
+from neutron.common import rpc
 
 
 class PublishErrorsHandler(logging.Handler):
@@ -24,7 +24,6 @@ class PublishErrorsHandler(logging.Handler):
         if ('neutron.openstack.common.notifier.log_notifier' in
                 cfg.CONF.notification_driver):
             return
-        notifier.api.notify(None, 'error.publisher',
-                            'error_notification',
-                            notifier.api.ERROR,
-                            dict(error=record.getMessage()))
+        notifier = rpc.get_notifier(publisher_id='error.publisher')
+        notifier.error(None, 'error_notification',
+                       dict(error=record.getMessage()))

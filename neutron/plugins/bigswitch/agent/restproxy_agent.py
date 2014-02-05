@@ -22,6 +22,7 @@ import sys
 import time
 
 from oslo.config import cfg
+from oslo import messaging
 
 from neutron.agent.linux import ovs_lib
 from neutron.agent.linux import utils
@@ -33,7 +34,6 @@ from neutron import context as q_context
 from neutron.extensions import securitygroup as ext_sg
 from neutron.openstack.common import excutils
 from neutron.openstack.common import log
-from neutron.openstack.common.rpc import dispatcher
 from neutron.plugins.bigswitch import config as pl_config
 
 LOG = log.getLogger(__name__)
@@ -84,7 +84,7 @@ class SecurityGroupAgent(sg_rpc.SecurityGroupAgentRpcMixin):
 
 class RestProxyAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
-    RPC_API_VERSION = '1.1'
+    target = messaging.Target(version='1.1')
 
     def __init__(self, integ_br, polling_interval, root_helper, vs='ovs'):
         super(RestProxyAgent, self).__init__()
@@ -99,15 +99,14 @@ class RestProxyAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             self.int_br = ovs_lib.OVSBridge(integ_br, root_helper)
 
     def _setup_rpc(self):
-        self.topic = topics.AGENT
         self.plugin_rpc = PluginApi(topics.PLUGIN)
         self.context = q_context.get_admin_context_without_session()
-        self.dispatcher = dispatcher.RpcDispatcher([self])
+        self.callbacks = [self]
         consumers = [[topics.PORT, topics.UPDATE],
                      [topics.SECURITY_GROUP, topics.UPDATE]]
-        self.connection = agent_rpc.create_consumers(self.dispatcher,
-                                                     self.topic,
-                                                     consumers)
+        self.rpc_servers = agent_rpc.create_servers(self.callbacks,
+                                                    topics.AGENT,
+                                                    consumers)
 
     def port_update(self, context, **kwargs):
         LOG.debug(_("Port update received"))
