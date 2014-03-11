@@ -70,6 +70,7 @@ L2_AGENT_3 = {
 
 PLUGIN_NAME = 'neutron.plugins.ml2.plugin.Ml2Plugin'
 NOTIFIER = 'neutron.plugins.ml2.rpc.AgentNotifierApi'
+L2POPAGENT = 'neutron.plugins.ml2.drivers.l2pop.rpc.L2populationAgentNotifyAPI'
 
 
 class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
@@ -111,14 +112,16 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
         prepare_patch = mock.patch(prepare)
         self.mock_prepare = prepare_patch.start()
 
-        cast = ('oslo.messaging.RPCClient.cast')
-        cast_patch = mock.patch(cast)
-        self.mock_cast = cast_patch.start()
-
         uptime = ('neutron.plugins.ml2.drivers.l2pop.db.L2populationDbMixin.'
                   'get_agent_uptime')
         uptime_patch = mock.patch(uptime, return_value=190)
         uptime_patch.start()
+
+        l2_notify_patch = mock.patch((L2POPAGENT + '._notification_host'))
+        self.mock_notify = l2_notify_patch.start()
+
+        l2_fanout_patch = mock.patch((L2POPAGENT + '._notification_fanout'))
+        self.mock_fanout = l2_fanout_patch.start()
 
         self.addCleanup(mock.patch.stopall)
         self.addCleanup(db_api.clear_db)
@@ -154,26 +157,23 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
 
                     device = 'tap' + p1['id']
 
-                    self.mock_prepare.reset_mock()
                     self.callbacks.update_device_up(self.adminContext,
                                                     agent_id=HOST,
                                                     device=device)
 
                     p1_ips = [p['ip_address'] for p in p1['fixed_ips']]
-                    expected = {'args':
-                                {'fdb_entries':
-                                 {p1['network_id']:
-                                  {'ports':
-                                   {'20.0.0.1': [constants.FLOODING_ENTRY,
-                                                 [p1['mac_address'],
-                                                  p1_ips[0]]]},
-                                   'network_type': 'vxlan',
-                                   'segment_id': 1}}},
-                                'namespace': None,
-                                'method': 'add_fdb_entries'}
+                    expected = \
+                        {p1['network_id']:
+                            {'ports': {
+                                '20.0.0.1': [constants.FLOODING_ENTRY,
+                                             [p1['mac_address'],
+                                              p1_ips[0]]]},
+                             'network_type': 'vxlan',
+                             'segment_id': 1}}
 
-                    self.mock_prepare.assert_called_with(
-                        mock.ANY, expected, topic=self.fanout_topic)
+                    self.mock_fanout.assert_called_with(mock.ANY,
+                                                        'add_fdb_entries',
+                                                        expected)
 
     def test_fdb_add_not_called_type_local(self):
         self._register_ml2_agents()
@@ -189,13 +189,12 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                     p1 = port1['port']
 
                     device = 'tap' + p1['id']
-
-                    self.mock_prepare.reset_mock()
+                    self.mock_fanout.reset()
                     self.callbacks.update_device_up(self.adminContext,
                                                     agent_id=HOST,
                                                     device=device)
 
-                    self.assertFalse(self.mock_prepare.called)
+                    self.assertFalse(self.mock_fanout.called)
 
     def test_fdb_add_two_agents(self):
         self._register_ml2_agents()
@@ -217,8 +216,6 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
 
                     device = 'tap' + p1['id']
 
-                    self.mock_cast.reset_mock()
-                    self.mock_prepare.reset_mock()
                     self.callbacks.update_device_up(self.adminContext,
                                                     agent_id=HOST,
                                                     device=device)
@@ -227,38 +224,30 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                     p2_ips = [p['ip_address'] for p in p2['fixed_ips']]
 
                     expected1 =\
-                        {'fdb_entries':
-                            {p1['network_id']:
-                                {'ports':
-                                    {'20.0.0.2': [constants.FLOODING_ENTRY,
-                                                  [p2['mac_address'],
-                                                   p2_ips[0]]]},
-                                 'network_type': 'vxlan',
-                                 'segment_id': 1}}}
+                        {p1['network_id']:
+                            {'ports':
+                                {'20.0.0.2': [constants.FLOODING_ENTRY,
+                                              [p2['mac_address'],
+                                                  p2_ips[0]]]},
+                                'network_type': 'vxlan',
+                                'segment_id': 1}}
 
-                    topic = topics.get_topic_name(topics.AGENT,
-                                                  topics.L2POPULATION,
-                                                  topics.UPDATE,
-                                                  HOST)
-
-                    self.mock_prepare.assert_called_with(topic=topic)
-                    self.mock_prepare.return_value.cast.assert_called_with(
-                        mock.ANY, 'add_fdb_entries', **expected1)
+                    self.mock_notify.assert_called_with(mock.ANY,
+                                                        'add_fdb_entries',
+                                                        expected1, HOST)
 
                     expected2 =\
-                        {'fdb_entries':
-                            {p1['network_id']:
-                                {'ports':
-                                    {'20.0.0.1': [constants.FLOODING_ENTRY,
-                                                  [p1['mac_address'],
-                                                   p1_ips[0]]]},
-                                 'network_type': 'vxlan',
-                                 'segment_id': 1}}}
+                        {p1['network_id']:
+                            {'ports':
+                                {'20.0.0.1': [constants.FLOODING_ENTRY,
+                                              [p1['mac_address'],
+                                                  p1_ips[0]]]},
+                                'network_type': 'vxlan',
+                                'segment_id': 1}}
 
-                    self.mock_prepare.assert_called_with(
-                        fanout=True, topic=self.fanout_topic)
-                    self.mock_prepare.return_value.cast.assert_called_with(
-                        mock.ANY, 'add_fdb_entries', **expected2)
+                    self.mock_fanout.assert_called_with(mock.ANY,
+                                                        'add_fdb_entries',
+                                                        expected2)
 
     def test_fdb_add_called_two_networks(self):
         self._register_ml2_agents()
@@ -281,8 +270,6 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
 
                             device = 'tap' + p3['id']
 
-                            self.mock_cast.reset_mock()
-                            self.mock_prepare.reset_mock()
                             self.callbacks.update_device_up(
                                 self.adminContext, agent_id=HOST,
                                 device=device)
@@ -290,44 +277,32 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                             p1_ips = [p['ip_address']
                                       for p in p1['fixed_ips']]
                             expected1 =\
-                                {'fdb_entries':
-                                    {p1['network_id']:
-                                        {'ports':
-                                            {'20.0.0.2':
-                                             [constants.FLOODING_ENTRY,
-                                              [p1['mac_address'],
-                                               p1_ips[0]]]},
-                                         'network_type': 'vxlan',
-                                         'segment_id': 1}}}
+                                {p1['network_id']:
+                                    {'ports':
+                                        {'20.0.0.2':
+                                            [constants.FLOODING_ENTRY,
+                                                [p1['mac_address'],
+                                                 p1_ips[0]]]},
+                                        'network_type': 'vxlan',
+                                        'segment_id': 1}}
 
-                            topic = topics.get_topic_name(topics.AGENT,
-                                                          topics.L2POPULATION,
-                                                          topics.UPDATE,
-                                                          HOST)
-                            self.mock_prepare.assert_called_with(topic=topic,
-                                                                 fanout=True)
-                            cast = self.mock_prepare.return_value
-                            cast.assert_called_with(
-                                mock.ANY, 'add_fdb_entries', **expected1)
+                            self.mock_notify.assert_called_with(
+                                mock.ANY, 'add_fdb_entries', expected1, HOST)
 
                             p3_ips = [p['ip_address']
                                       for p in p3['fixed_ips']]
                             expected2 =\
-                                {'fdb_entries':
-                                    {p1['network_id']:
-                                        {'ports':
-                                            {'20.0.0.1':
-                                             [constants.FLOODING_ENTRY,
-                                              [p3['mac_address'],
-                                               p3_ips[0]]]},
-                                         'network_type': 'vxlan',
-                                         'segment_id': 1}}}
+                                {p1['network_id']:
+                                    {'ports':
+                                        {'20.0.0.1':
+                                            [constants.FLOODING_ENTRY,
+                                             [p3['mac_address'],
+                                                 p3_ips[0]]]},
+                                     'network_type': 'vxlan',
+                                     'segment_id': 1}}
 
-                            self.mock_prepare.assert_called_with(
-                                fanout=True,
-                                topic=self.fanout_topic)
-                            cast.assert_called_with(
-                                mock.ANY, 'add_fdb_entries', **expected2)
+                            self.mock_fanout.assert_called_with(
+                                mock.ANY, 'add_fdb_entries', expected2)
 
     def test_update_port_down(self):
         self._register_ml2_agents()
@@ -343,7 +318,6 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                     p2 = port2['port']
                     device2 = 'tap' + p2['id']
 
-                    self.mock_prepare.reset_mock()
                     self.callbacks.update_device_up(self.adminContext,
                                                     agent_id=HOST,
                                                     device=device2)
@@ -354,25 +328,21 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                     self.callbacks.update_device_up(self.adminContext,
                                                     agent_id=HOST,
                                                     device=device1)
-                    self.mock_prepare.reset_mock()
                     self.callbacks.update_device_down(self.adminContext,
                                                       agent_id=HOST,
                                                       device=device2)
 
                     p2_ips = [p['ip_address'] for p in p2['fixed_ips']]
                     expected =\
-                        {'fdb_entries':
-                            {p2['network_id']:
-                                {'ports':
-                                    {'20.0.0.1': [[p2['mac_address'],
-                                                  p2_ips[0]]]},
-                                 'network_type': 'vxlan',
-                                 'segment_id': 1}}}
+                        {p2['network_id']:
+                            {'ports':
+                                {'20.0.0.1': [[p2['mac_address'],
+                                               p2_ips[0]]]},
+                                'network_type': 'vxlan',
+                                'segment_id': 1}}
 
-                    self.mock_prepare.assert_called_with(
-                        fanout=True, topic=self.fanout_topic)
-                    self.mock_prepare.return_value.cast.assert_called_with(
-                        mock.ANY, 'remove_fdb_entries', **expected)
+                    self.mock_fanout.assert_called_with(
+                        mock.ANY, 'remove_fdb_entries', expected)
 
     def test_update_port_down_last_port_up(self):
         self._register_ml2_agents()
@@ -388,7 +358,6 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                     p2 = port2['port']
                     device2 = 'tap' + p2['id']
 
-                    self.mock_prepare.reset_mock()
                     self.callbacks.update_device_up(self.adminContext,
                                                     agent_id=HOST,
                                                     device=device2)
@@ -399,19 +368,16 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
 
                     p2_ips = [p['ip_address'] for p in p2['fixed_ips']]
                     expected =\
-                        {'fdb_entries':
-                            {p2['network_id']:
-                                {'ports':
-                                    {'20.0.0.1': [constants.FLOODING_ENTRY,
-                                                  [p2['mac_address'],
-                                                   p2_ips[0]]]},
-                                 'network_type': 'vxlan',
-                                 'segment_id': 1}}}
+                        {p2['network_id']:
+                            {'ports':
+                                {'20.0.0.1': [constants.FLOODING_ENTRY,
+                                             [p2['mac_address'],
+                                                 p2_ips[0]]]},
+                                'network_type': 'vxlan',
+                                'segment_id': 1}}
 
-                    self.mock_prepare.assert_called_with(
-                        fanout=True, topic=self.fanout_topic)
-                    self.mock_prepare.return_value.cast.assert_called_with(
-                        mock.ANY, 'remove_fdb_entries', **expected)
+                    self.mock_fanout.assert_called_with(
+                        mock.ANY, 'remove_fdb_entries', expected)
 
     def test_delete_port(self):
         self._register_ml2_agents()
@@ -424,7 +390,6 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                 p1 = port['port']
                 device = 'tap' + p1['id']
 
-                self.mock_prepare.reset_mock()
                 self.callbacks.update_device_up(self.adminContext,
                                                 agent_id=HOST,
                                                 device=device)
@@ -435,25 +400,21 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                     p2 = port2['port']
                     device1 = 'tap' + p2['id']
 
-                    self.mock_prepare.reset_mock()
                     self.callbacks.update_device_up(self.adminContext,
                                                     agent_id=HOST,
                                                     device=device1)
 
                 p2_ips = [p['ip_address'] for p in p2['fixed_ips']]
                 expected =\
-                    {'fdb_entries':
-                        {p2['network_id']:
-                            {'ports':
-                                {'20.0.0.1': [[p2['mac_address'],
-                                               p2_ips[0]]]},
-                             'network_type': 'vxlan',
-                             'segment_id': 1}}}
+                    {p2['network_id']:
+                        {'ports':
+                            {'20.0.0.1': [[p2['mac_address'],
+                                           p2_ips[0]]]},
+                            'network_type': 'vxlan',
+                            'segment_id': 1}}
 
-                self.mock_prepare.assert_any_call(
-                    fanout=True, topic=self.fanout_topic)
-                self.mock_prepare.return_value.cast.assert_any_call(
-                    mock.ANY, 'remove_fdb_entries', **expected)
+                self.mock_fanout.assert_called_with(
+                    mock.ANY, 'remove_fdb_entries', expected)
 
     def test_delete_port_last_port_up(self):
         self._register_ml2_agents()
@@ -476,19 +437,16 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
 
                 p1_ips = [p['ip_address'] for p in p1['fixed_ips']]
                 expected =\
-                    {'fdb_entries':
-                        {p1['network_id']:
-                            {'ports':
-                                {'20.0.0.1': [constants.FLOODING_ENTRY,
-                                              [p1['mac_address'],
-                                               p1_ips[0]]]},
-                             'network_type': 'vxlan',
-                             'segment_id': 1}}}
+                    {p1['network_id']:
+                        {'ports':
+                            {'20.0.0.1': [constants.FLOODING_ENTRY,
+                                         [p1['mac_address'],
+                                             p1_ips[0]]]},
+                            'network_type': 'vxlan',
+                            'segment_id': 1}}
 
-                self.mock_prepare.assert_any_call(
-                    fanout=True, topic=self.fanout_topic)
-                self.mock_prepare.return_value.cast.assert_any_call(
-                    mock.ANY, 'remove_fdb_entries', **expected)
+                self.mock_fanout.assert_called_with(
+                    mock.ANY, 'remove_fdb_entries', expected)
 
     def test_fixed_ips_changed(self):
         self._register_ml2_agents()
@@ -506,8 +464,6 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                                                 agent_id=HOST,
                                                 device=device)
 
-                self.mock_prepare.reset_mock()
-
                 data = {'port': {'fixed_ips': [{'ip_address': '10.0.0.2'},
                                                {'ip_address': '10.0.0.10'}]}}
                 req = self.new_update_request('ports', data, p1['id'])
@@ -516,19 +472,14 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                 self.assertEqual(len(ips), 2)
 
                 add_expected =\
-                    {'fdb_entries':
-                        {'chg_ip':
-                            {p1['network_id']:
-                                {'20.0.0.1':
-                                    {'after': [[p1['mac_address'],
-                                               '10.0.0.10']]}}}}}
+                    {'chg_ip':
+                        {p1['network_id']:
+                            {'20.0.0.1':
+                                {'after': [[p1['mac_address'],
+                                           '10.0.0.10']]}}}}
 
-                self.mock_prepare.assert_any_call(
-                    fanout=True, topic=self.fanout_topic)
-                self.mock_prepare.return_value.cast.assert_any_call(
-                    mock.ANY, 'update_fdb_entries', **add_expected)
-
-                self.mock_prepare.reset_mock()
+                self.mock_fanout.assert_called_with(
+                    mock.ANY, 'update_fdb_entries', add_expected)
 
                 data = {'port': {'fixed_ips': [{'ip_address': '10.0.0.2'},
                                                {'ip_address': '10.0.0.16'}]}}
@@ -538,21 +489,16 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                 self.assertEqual(len(ips), 2)
 
                 upd_expected =\
-                    {'fdb_entries':
-                        {'chg_ip':
-                            {p1['network_id']:
-                                {'20.0.0.1':
-                                    {'before': [[p1['mac_address'],
-                                                '10.0.0.10']],
-                                     'after': [[p1['mac_address'],
-                                               '10.0.0.16']]}}}}}
+                    {'chg_ip':
+                        {p1['network_id']:
+                            {'20.0.0.1':
+                                {'before': [[p1['mac_address'],
+                                            '10.0.0.10']],
+                                 'after': [[p1['mac_address'],
+                                           '10.0.0.16']]}}}}
 
-                self.mock_prepare.assert_any_call(
-                    fanout=True, topic=self.fanout_topic)
-                self.mock_prepare.return_value.cast.assert_any_call(
-                    mock.ANY, 'update_fdb_entries', **upd_expected)
-
-                self.mock_prepare.reset_mock()
+                self.mock_fanout.assert_called_with(
+                    mock.ANY, 'update_fdb_entries', upd_expected)
 
                 data = {'port': {'fixed_ips': [{'ip_address': '10.0.0.16'}]}}
                 req = self.new_update_request('ports', data, p1['id'])
@@ -561,17 +507,14 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                 self.assertEqual(len(ips), 1)
 
                 del_expected =\
-                    {'fdb_entries':
-                        {'chg_ip':
-                            {p1['network_id']:
-                                {'20.0.0.1':
-                                    {'before': [[p1['mac_address'],
-                                                '10.0.0.2']]}}}}}
+                    {'chg_ip':
+                        {p1['network_id']:
+                            {'20.0.0.1':
+                                {'before': [[p1['mac_address'],
+                                             '10.0.0.2']]}}}}
 
-                self.mock_prepare.assert_any_call(
-                    fanout=True, topic=self.fanout_topic)
-                self.mock_prepare.return_value.cast.assert_any_call(
-                    mock.ANY, 'update_fdb_entries', **del_expected)
+                self.mock_fanout.assert_called_with(
+                    mock.ANY, 'update_fdb_entries', del_expected)
 
     def test_no_fdb_updates_without_port_updates(self):
         self._register_ml2_agents()
@@ -589,7 +532,6 @@ class TestL2PopulationRpcTestCase(test_plugin.NeutronDbPluginV2TestCase):
                                                 agent_id=HOST,
                                                 device=device)
                 p1['status'] = 'ACTIVE'
-                self.mock_prepare.reset_mock()
 
                 fanout = ('neutron.plugins.ml2.drivers.l2pop.rpc.'
                           'L2populationAgentNotifyAPI._notification_fanout')
