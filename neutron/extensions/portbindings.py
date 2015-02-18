@@ -75,6 +75,7 @@ VNIC_NORMAL = 'normal'
 VNIC_DIRECT = 'direct'
 VNIC_MACVTAP = 'macvtap'
 VNIC_TYPES = [VNIC_NORMAL, VNIC_DIRECT, VNIC_MACVTAP]
+VIF_PLUGIN_SCRIPT = 'vif_plugin_script'
 
 EXTENDED_ATTRIBUTES_2_0 = {
     'ports': {
