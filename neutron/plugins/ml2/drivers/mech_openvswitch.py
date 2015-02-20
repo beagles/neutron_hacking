@@ -39,6 +39,13 @@ class OpenvswitchMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         sg_enabled = securitygroups_rpc.is_firewall_enabled()
         vif_details = {portbindings.CAP_PORT_FILTER: sg_enabled,
                        portbindings.OVS_HYBRID_PLUG: sg_enabled}
+
+        # XXX Experimental! This is just to hook into a pre-established
+        # flow to analyze the flow and work out the kinks. It'll be other
+        # drivers that use this kind of thing.
+        plug_script = cfg.CONF.get('vif_plugin_script')
+        if plug_script:
+            vif_details[portbindings.VIF_PLUGIN_SCRIPT] = plug_script
         super(OpenvswitchMechanismDriver, self).__init__(
             constants.AGENT_TYPE_OVS,
             portbindings.VIF_TYPE_OVS,

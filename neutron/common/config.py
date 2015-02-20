@@ -121,6 +121,9 @@ core_opts = [
     cfg.IntOpt('send_events_interval', default=2,
                help=_('Number of seconds between sending events to nova if '
                       'there are any events to send.')),
+    cfg.StrOpt('vif_plugin_script',
+               help=_('Path to script to be invoked by nova to complete '
+                      'connection of a VIF to a networking back end')),
 ]
 
 core_cli_opts = [

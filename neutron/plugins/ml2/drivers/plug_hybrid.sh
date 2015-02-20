@@ -1,4 +1,7 @@
 #!/bin/bash
+# 
+# THIS IS JUST EXPERIMENTAL!!!!! OVS/linux bridge Hybrid Bridges is not a
+# candidate for this stuff at this time.
 #
 # Expected environment variables.
 # OS_VIF_ID
