@@ -4,25 +4,31 @@
 # candidate for this stuff at this time.
 #
 # Expected environment variables.
-# OS_VIF_ID
-# OS_INTEGRATION_BRIDGE_NAME
-# OS_BRIDGE_NAME
-# OS_VIF_ADDRESS
-# OS_MAC_ADDRESS
-# OS_INSTANCE_ID
-# OS_MTU
+# VIF_ID
+# VIF_DEVNAME
+# VIF_MAC_ADDRESS
+# VIF_INSTANCE_ID
+
+export PATH=/usr/sbin:/sbin:/usr/bin:/bin
+
+BASE_ID="${VIF_ID:0:11}"
+
+BRIDGE_NAME="qvb-$BASE_ID"
 
 # Create bridge if it doesn't exist
-if ! [ ip link show $OS_BRIDGE_NAME 2>/dev/null ];
+if ! [ ip link show $BRIDGE_NAME 2>/dev/null ];
 then
-    brctl addbr $OS_BRIDGE_NAME
-    brctl addbr setfd $OS_BRIDGE_NAME 0
-    brctl stp $OS_BRIDGE_NAME off
-    echo 0 | tee /sys/class/net/$OS_BRIDGE_NAME/bridge/multicast_snooping
+    brctl addbr $BRIDGE_NAME
+    brctl addbr setfd $BRIDGE_NAME 0
+    brctl stp $BRIDGE_NAME off
+    if test -e /sys/class/net/$BRIDGE_NAME/bridge/multicast_snooping;
+    then
+	echo 0 | tee /sys/class/net/$BRIDGE_NAME/bridge/multicast_snooping
+    fi
 fi
 
-VETH0="qvb-$OS_VIF_ID"
-VETH1="qvo-$OS_VIF_ID"
+VETH0="qvb-$BASE_ID"
+VETH1="qvo-$BASE_ID"
 
 # TODO: error handling
 
@@ -34,15 +40,13 @@ then
     ip link set $VETH0 promisc on
     ip link set $VETH1 up
     ip link set $VETH1 promisc on
-    ip link set $OS_BRIDGE_NAME up
-    brctl addif $OS_BRIDGE_NAME $ETH0
+    ip link set $BRIDGE_NAME up
+    brctl addif $BRIDGE_NAME $VETH0
 fi
 
-ovs-vsctl -- --if-exists del-port $VETH1 -- add-port $OS_INTEGRATION_BRIDGE_NAME $VETH1 --\
-    set Interface $VETH1 external-ids:iface-ids=$OVS_VIF_ID \
+ovs-vsctl -- --if-exists del-port $VETH1 -- add-port br-int $VETH1 --\
+    set Interface $VETH1 external-ids:iface-ids=$VIF_ID \
     external-ids:iface-status active \
-    external-ids:attached-mac=$OS_MAC_ADDRESS \
-    external-ids:vm-uuid=$OS_INSTANCE_ID
+    external-ids:attached-mac=$VIF_MAC_ADDRESS \
+    external-ids:vm-uuid=$VIF_INSTANCE_ID
 
-# TODO: error code?
-ip link set $VETH1 mtu $OS_MTU
