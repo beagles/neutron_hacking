@@ -47,7 +47,7 @@ then
     fi
 
     sudo ovs-vsctl -- --if-exists del-port br-int $VETH1 -- add-port br-int $VETH1 --\
-    set Interface $VETH1 external-ids:iface-ids=$VIF_ID \
+    set Interface $VETH1 external-ids:iface-id=$VIF_ID \
 	external-ids:iface-status=active \
 	external-ids:attached-mac=$VIF_MAC_ADDRESS \
 	external-ids:vm-uuid=$VIF_INSTANCE_ID
